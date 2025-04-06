@@ -1,0 +1,7 @@
+README.md
+setup.py
+quant_trading_bot.egg-info/PKG-INFO
+quant_trading_bot.egg-info/SOURCES.txt
+quant_trading_bot.egg-info/dependency_links.txt
+quant_trading_bot.egg-info/requires.txt
+quant_trading_bot.egg-info/top_level.txt

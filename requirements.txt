@@ -1,0 +1,28 @@
+# Core dependencies
+pyyaml==6.0
+python-dotenv==1.0.0
+discord.py==2.3.2
+
+# Utilities
+aiohttp==3.8.6
+asyncio==3.4.3
+jsonschema==4.20.0
+python-dateutil==2.8.2
+
+# For testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+
+# For mock broker adapter
+pytz==2023.3
+
+# For Interactive Brokers adapter (commented out, install if needed)
+# ib_insync==0.9.85
+
+# For MooMoo adapter (commented out, install if needed)
+# futu-api==6.1.4908
+
+# Optional - for web dashboard (not implemented in P0)
+# fastapi==0.103.2
+# uvicorn==0.23.2
+# jinja2==3.1.2 
