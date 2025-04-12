@@ -1,0 +1,32 @@
+listener:
+  discord_token: "YOUR_DISCORD_TOKEN_HERE"  # 替换为您的Discord机器人令牌
+  channel_ids:
+    - "YOUR_CHANNEL_ID_HERE"  # 替换为您要监听的Discord频道ID
+  reconnect_attempts: 3
+  message_throttle: 100
+
+parser:
+  formats:
+    - standard
+    - chinese
+
+risk_management:
+  max_position_size: 0.02  # 2% of account
+  max_loss_per_trade: 0.01  # 1% of account
+  daily_loss_limit: 0.05  # 5% of account
+  max_open_positions: 5
+  correlation_threshold: 0.7
+  blacklisted_symbols: []
+
+broker:
+  broker_type: mock  # 使用模拟券商
+  trading_mode: paper  # 使用模拟交易模式
+  credentials:
+    api_key: ''
+    api_secret: ''
+  connection_timeout: 30
+
+logging:
+  level: INFO
+  file: logs/quant_bot.log
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s' 
