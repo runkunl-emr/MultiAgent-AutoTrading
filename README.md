@@ -68,22 +68,38 @@ pip install -r requirements.txt
 
 ## Configuration
 
-1. Create a configuration file from the template
+### Setting up Discord Token
 
-```bash
-cp quant_trading_bot/config/config_template.yaml quant_trading_bot/config/config.yaml
-```
+For security reasons, the Discord token should never be committed to the repository. Follow these steps to set up your token:
 
-2. Edit the configuration file to set Discord token, channel IDs, risk parameters, and broker information
+1. Copy the template configuration file:
+   ```bash
+   cp config/discord_config_template.yaml config/discord_config.yaml
+   ```
 
-The configuration file contains the following main sections:
+2. Edit the configuration file and replace `${DISCORD_TOKEN}` with your actual Discord token:
+   ```bash
+   # Open the file in your preferred editor
+   nano config/discord_config.yaml
+   ```
 
-- `listener`: Discord listener configuration
-- `parser`: Parser configuration
-- `risk_management`: Risk management parameters
-- `broker`: Broker configuration
-- `execution`: Execution settings
-- `logging`: Logging configuration
+3. Alternatively, you can use environment variables:
+   ```bash
+   # Set environment variable
+   export DISCORD_TOKEN="your_discord_token"
+   
+   # Then in the config file, keep the placeholder:
+   # token: "${DISCORD_TOKEN}"
+   ```
+
+4. Make sure not to commit your real token to the repository.
+
+### Security Best Practices
+
+- Never commit sensitive tokens or credentials to Git repositories
+- Use environment variables for sensitive data in production
+- Keep the config file with real tokens in `.gitignore`
+- Consider using a secrets management solution for production deployments
 
 ## Running
 

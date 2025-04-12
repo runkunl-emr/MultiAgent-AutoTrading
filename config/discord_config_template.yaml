@@ -1,0 +1,34 @@
+discord:
+  # Discord user token (required)
+  token: "${DISCORD_TOKEN}"  # Replace with your token or use environment variable
+  
+  # Channel IDs to monitor (required)
+  channel_ids:
+    - "1358313509993058351"  # Replace with your channel ID
+  
+  # Trading signal keywords
+  signal_keywords:
+    - buy
+    - sell
+    - long
+    - short
+    - signal
+    - trading
+    - trade
+    - entry
+    - bullish
+    - bearish
+
+notification:
+  # Enable notifications
+  enabled: true
+  # Notification sound (Mac)
+  sound: "Submarine"
+
+logging:
+  # Log level
+  level: "INFO"
+  # Log file
+  file: "logs/discord_monitor.log"
+  # Trading signal log file
+  signal_file: "logs/trading_signals.log" 
