@@ -1,146 +1,213 @@
 # Quantitative Trading Bot
 
-量化交易机器人，用于自动监听和执行交易信号。
+Automated trading system that monitors Discord alerts and executes trades.
 
-## 项目概述
+## Project Overview
 
-该项目实现了一个完整的量化交易机器人，能够监听Discord通道中的交易信号，解析信号内容，进行风险评估，并通过券商API执行交易。特别适合需要快速响应交易机会的交易者。
+This project implements a complete quantitative trading bot capable of monitoring trading signals in Discord channels, parsing signal content, conducting risk assessment, and executing trades through broker APIs. Particularly suitable for traders who need to respond quickly to trading opportunities.
 
-### 特点
+### Features
 
-- Discord消息监听和处理
-- 支持多种格式的信号解析（包括英文和中文）
-- 可配置的风险管理系统
-- 模拟交易和实盘交易模式
-- 断路器和自动重试机制，增强系统稳定性
-- 详细的日志和交易统计
-- 简单高效的可配置接口
+- Discord message monitoring and processing
+- Support for multiple signal formats (including English and Chinese)
+- Configurable risk management system
+- Paper trading and live trading modes
+- Circuit breakers and automatic retry mechanisms for enhanced system stability
+- Detailed logging and trade statistics
+- Simple and efficient configuration interface
 
-## 项目结构
+## Project Structure
 
 ```
 quant_trading_bot/
-├── adapters/            # 外部服务适配器
-│   ├── broker_adapter.py  # 券商适配器接口
-│   ├── ibkr_adapter.py    # 盈透证券适配器
-│   └── mock_adapter.py    # 模拟交易适配器
-├── config/              # 配置文件
-│   ├── config.py          # 配置加载
-│   └── config_template.yaml  # 配置模板
-├── core/                # 核心功能模块
-│   ├── executor.py        # 执行交易
-│   ├── listener.py        # 监听Discord消息
-│   ├── models.py          # 数据模型
-│   ├── orchestrator.py    # 协调各模块
-│   ├── parser.py          # 解析交易信号
-│   └── risk_guard.py      # 风险控制
-├── utils/               # 工具模块
-│   ├── circuit_breaker.py # 断路器
-│   ├── logging.py         # 日志工具
-│   └── retry.py           # 重试机制
-├── logs/                # 日志文件目录
-├── main.py              # 主程序入口
-├── test_bot.py          # 测试脚本
-└── requirements.txt     # 依赖项
+├── adapters/            # External service adapters
+│   ├── broker_adapter.py  # Broker adapter interface
+│   ├── ibkr_adapter.py    # Interactive Brokers adapter
+│   └── mock_adapter.py    # Mock trading adapter
+├── config/              # Configuration files
+│   ├── config.py          # Config loading
+│   └── config_template.yaml  # Config template
+├── core/                # Core functionality modules
+│   ├── executor.py        # Trade execution
+│   ├── listener.py        # Discord message listener
+│   ├── models.py          # Data models
+│   ├── orchestrator.py    # Module coordination
+│   ├── parser.py          # Trading signal parser
+│   └── risk_guard.py      # Risk control
+├── utils/               # Utility modules
+│   ├── circuit_breaker.py # Circuit breaker
+│   ├── logging.py         # Logging utilities
+│   └── retry.py           # Retry mechanism
+├── logs/                # Log files directory
+├── main.py              # Main program entry
+├── test_bot.py          # Test script
+└── requirements.txt     # Dependencies
 ```
 
-## 安装
+## Installation
 
-1. 克隆仓库
+1. Clone the repository
 
 ```bash
 git clone https://github.com/yourusername/quant_trading_bot.git
 cd quant_trading_bot
 ```
 
-2. 创建虚拟环境（推荐）
+2. Create a virtual environment (recommended)
 
 ```bash
 python -m venv venv
-source venv/bin/activate  # 在Windows上使用: venv\Scripts\activate
+source venv/bin/activate  # On Windows use: venv\Scripts\activate
 ```
 
-3. 安装依赖
+3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 配置
+## Configuration
 
-1. 从模板创建配置文件
+1. Create a configuration file from the template
 
 ```bash
 cp quant_trading_bot/config/config_template.yaml quant_trading_bot/config/config.yaml
 ```
 
-2. 编辑配置文件，设置Discord令牌、频道ID、风险参数和券商信息
+2. Edit the configuration file to set Discord token, channel IDs, risk parameters, and broker information
 
-配置文件包含以下主要部分：
+The configuration file contains the following main sections:
 
-- `listener`: Discord监听器配置
-- `parser`: 解析器配置
-- `risk_management`: 风险管理参数
-- `broker`: 券商配置
-- `execution`: 执行设置
-- `logging`: 日志配置
+- `listener`: Discord listener configuration
+- `parser`: Parser configuration
+- `risk_management`: Risk management parameters
+- `broker`: Broker configuration
+- `execution`: Execution settings
+- `logging`: Logging configuration
 
-## 运行
+## Running
 
-### 基本运行
+### Basic Usage
 
 ```bash
 python -m quant_trading_bot.main --config quant_trading_bot/config/config.yaml
 ```
 
-### 参数说明
+### Parameter Description
 
-- `--config`, `-c`: 配置文件路径（默认：config/config.yaml）
-- `--log-level`, `-l`: 日志级别（默认：INFO）
-- `--dry-run`, `-d`: 测试模式，不执行实际交易
+- `--config`, `-c`: Configuration file path (default: config/config.yaml)
+- `--log-level`, `-l`: Logging level (default: INFO)
+- `--dry-run`, `-d`: Test mode, no actual trades executed
 
-### 示例
+### Examples
 
 ```bash
-# 以DEBUG日志级别运行
+# Run with DEBUG log level
 python -m quant_trading_bot.main --log-level DEBUG
 
-# 以测试模式运行（无实际交易）
+# Run in test mode (no actual trades)
 python -m quant_trading_bot.main --dry-run
 ```
 
-## 测试
+## Testing
 
-可以使用测试脚本来验证系统各部分的功能：
+You can use the test script to verify functionality of different parts of the system:
 
 ```bash
 python -m quant_trading_bot.test_bot --test all
 ```
 
-测试选项：
-- `all`: 运行所有测试
-- `parsing`: 测试消息解析
-- `manual`: 测试手动交易执行
-- `rejected`: 测试风控拒绝交易
+Test options:
+- `all`: Run all tests
+- `parsing`: Test message parsing
+- `manual`: Test manual trade execution
+- `rejected`: Test risk control trade rejection
 
-## 开发
+## Development
 
-### 添加新的券商适配器
+### Adding a New Broker Adapter
 
-1. 在`adapters`目录下创建新的适配器文件
-2. 继承`BrokerAdapter`类并实现所有必需的方法
-3. 在`BrokerAdapterFactory`中添加新适配器的创建逻辑
+1. Create a new adapter file in the `adapters` directory
+2. Inherit from the `BrokerAdapter` class and implement all required methods
+3. Add creation logic for the new adapter in the `BrokerAdapterFactory`
 
-### 添加新的信号格式
+### Adding a New Signal Format
 
-1. 在`core/parser.py`中添加新的解析器类
-2. 继承`AlertParser`类并实现`can_parse`和`parse_alert`方法
-3. 在`ParserFactory`中注册新的解析器
+1. Add a new parser class in `core/parser.py`
+2. Inherit from the `AlertParser` class and implement the `can_parse` and `parse_alert` methods
+3. Register the new parser in the `ParserFactory`
 
-## 风险声明
+## Development Progress Tracking
 
-此软件仅供教育和研究目的。使用该工具进行实际交易风险自负。开发者不对任何交易决策或结果负责。
+This section tracks the development status of various components.
 
-## 许可
+### Discord Listener Module
+
+| Feature | Status | Description |
+|------|------|------|
+| WebSocket Connection | ✅ Completed | Stable connection to Discord Gateway |
+| Heartbeat Mechanism | ✅ Completed | Fixed at 60-second intervals |
+| Message Filtering | ✅ Completed | Only displays messages from specified channels |
+| Channel Name Resolution | ✅ Completed | Retrieves readable channel names from IDs |
+| Message Content Retrieval | ✅ Completed | Support for retrieving from regular messages, embeds, and attachments |
+| Keyword Filtering | ✅ Completed | Trading signal keyword detection based on configuration |
+| Colored Terminal Output | ✅ Completed | Improved log readability |
+| REST API Toggle | ✅ Completed | Option to use REST API for detailed information |
+| User Message Identification | ✅ Completed | Distinguishes between self and others' messages |
+| Message Latency Detection | ✅ Completed | Measures message processing time |
+| Enhanced Error Handling | 🚧 In Progress | Need more robust error recovery mechanisms |
+
+### Signal Parsing Module
+
+| Feature | Status | Description |
+|------|------|------|
+| Basic Keyword Matching | ✅ Completed | Detects trading signal keywords |
+| Structured Signal Extraction | 🚧 Planned | Converts messages to standard trading instructions |
+| Multi-source Adaptation | 🚧 Planned | Support for different trading signal source formats |
+
+### Trade Execution Module
+
+| Feature | Status | Description |
+|------|------|------|
+| Paper Trading Interface | 🚧 Planned | Simulated trading system for testing |
+| Broker API Integration | 🚧 Planned | Connection to actual broker APIs and trade execution |
+| Multi-broker Adapters | 🚧 Planned | Support for multiple trading platforms |
+
+### Risk Management Module
+
+| Feature | Status | Description |
+|------|------|------|
+| Basic Capital Management | 🚧 Planned | Controls the proportion of capital per trade |
+| Stop-Loss/Take-Profit Strategies | 🚧 Planned | Automatically sets stop-loss and take-profit levels |
+| Trading Restriction Rules | 🚧 Planned | Prevents excessive trading and risk accumulation |
+
+### System and Infrastructure
+
+| Feature | Status | Description |
+|------|------|------|
+| Configuration Management | ✅ Completed | YAML configuration system, supports command-line parameters |
+| Logging System | ✅ Completed | Basic logging functionality |
+| Notification System | ✅ Completed | Support for desktop and console notifications |
+| Unit Tests | 🚧 Planned | Test cases for various modules |
+| Complete Documentation | 🚧 In Progress | Code comments and usage instructions |
+
+### Recent Updates (2025-04-06)
+
+1. **Discord Listener Enhancements**:
+   - Implemented channel filtering functionality, now only displaying messages from channels in the monitoring list
+   - Added caching and display of channel names and server names
+   - Optimized heartbeat mechanism, fixed at 60-second intervals
+   - Improved message content retrieval reliability
+
+2. **Pending Issues**:
+   - Optimize reconnection logic, enhance stability
+   - Further improve message parsing and signal extraction
+   - Add more test cases
+
+## Risk Disclaimer
+
+This software is for educational and research purposes only. Use of this tool for actual trading is at your own risk. The developers are not responsible for any trading decisions or results.
+
+## License
 
 [MIT License](LICENSE) 
