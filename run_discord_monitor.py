@@ -198,15 +198,15 @@ class MessageProcessor:
         self.token = token  # Store token for REST API calls
         self.use_rest_api = use_rest_api  # Control whether to use REST API
         self.current_user = None  # Store current username to compare message sender
-        # Print monitored channel IDs
-        print(f"{Colors.YELLOW}Currently monitoring these channel IDs:{Colors.RESET}")
+        # Print only monitored channel IDs without extra text
         for channel_id in channel_ids:
-            print(f"- {channel_id}")
+            if channel_id not in self.channel_ids:
+                self.channel_ids.append(channel_id)
         
     def set_current_user(self, username: str):
         """Set current username"""
         self.current_user = username
-        print(f"Set current user to: {username}")
+        print(f"Logged in as: {username}")
         
     def process_message(self, message_data: Dict[str, Any]):
         try:
@@ -216,14 +216,22 @@ class MessageProcessor:
             
             # Check if this channel is in our monitoring list first
             # If not, silently ignore the message without processing
-            if channel_id not in self.channel_ids:
-                # Completely skip processing non-monitored channels
+            # 修复类型不匹配问题 - 确保比较时都是字符串类型
+            channel_id_str = str(channel_id)
+            is_monitored = False
+            
+            for monitored_id in self.channel_ids:
+                if str(monitored_id) == channel_id_str:
+                    is_monitored = True
+                    break
+                    
+            if not is_monitored:
                 return
             
             # Start timing for latency measurement
             start_time = time.time()
             
-            guild_id = message_data.get("guild_id", "unknown")  # Get the server (guild) ID
+            # Get essential message data
             content = message_data.get("content", "")
             author = message_data.get("author", {}).get("username", "unknown")
             
@@ -231,125 +239,74 @@ class MessageProcessor:
             channel_name = message_data.get("_channel_name", "Unknown Channel")
             guild_name = message_data.get("_guild_name", "Unknown Server")
             
-            # Display clear separator and highlight message ID
-            print(f"\n{Colors.MAGENTA}{'='*80}{Colors.RESET}")
-            print(f"{Colors.CYAN}Received new message | ID: {message_id} | Channel: {channel_name} ({channel_id}) | Server: {guild_name} ({guild_id}) | Author: {author}{Colors.RESET}")
-            print(f"{Colors.MAGENTA}{'='*80}{Colors.RESET}")
+            # Check if message has already been processed to avoid duplicates
+            if message_id in self.processed_message_ids:
+                return
+            
+            # Add to processed message set
+            self.processed_message_ids.add(message_id)
+            
+            # Limit processed message count
+            if len(self.processed_message_ids) > 1000:
+                old_ids = list(self.processed_message_ids)[:500]
+                for old_id in old_ids:
+                    self.processed_message_ids.remove(old_id)
             
             # Check if message sender is the current user
             is_self_message = self.current_user and author == self.current_user
-            print(f"Message type: {'Self message' if is_self_message else 'Message from other user'}")
             
-            # Raw message data for debugging
-            print(f"{Colors.RED}RAW RESPONSE:{Colors.RESET}")
-            print(json.dumps(message_data, indent=2, ensure_ascii=False))
+            # Get timestamp - convert Discord format to readable time if possible
+            timestamp = message_data.get("timestamp", "")
+            try:
+                if timestamp:
+                    # Convert ISO format to datetime
+                    dt = datetime.datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    # Format as human-readable
+                    timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except:
+                # If conversion fails, use original
+                pass
             
-            # Processed information (formatted output)
-            print(f"\n{Colors.GREEN}PROCESSED RESPONSE:{Colors.RESET}")
+            # Display clear separator for new messages - FOCUS ON THE CONTENT
+            print(f"\n{Colors.MAGENTA}{'='*15} NEW MESSAGE IN MONITORED CHANNEL {'='*15}{Colors.RESET}")
+            print(f"{Colors.CYAN}[{timestamp}] {author} in {channel_name}{Colors.RESET}")
             
-            # Message content check
+            # Message content - THIS IS WHAT USER MAINLY CARES ABOUT
             if content:
-                print(f"Content length: {len(content)} characters")
-                print(f"Content: {content}")
+                print(f"\n{Colors.GREEN}{content}{Colors.RESET}")
             else:
-                print("Warning: Message content is empty!")
-                print("Trying to extract content from other fields...")
-                
-                # Deep check all possible content-containing fields in message data
-                for key, value in message_data.items():
-                    if isinstance(value, str) and len(value) > 0:
-                        print(f"Field '{key}' contains text: {value}")
-                    elif isinstance(value, dict):
-                        print(f"Field '{key}' is an object with the following sub-fields: {', '.join(value.keys())}")
-                
-            # Check permission-related fields
-            if "member" in message_data:
-                print("Contains member field - may have server permission information")
-                member_data = message_data.get("member", {})
-                print(f"Member field content: {json.dumps(member_data, ensure_ascii=False)[:300]}...")
-                
-            # Print key field check
-            print(f"Message data contains the following fields: {', '.join(message_data.keys())}")
-            
-            # Try to recover message content (if empty)
-            if not content and not is_self_message:
-                print("Trying to recover content from other user's message...")
+                # Try to recover content from embeds and attachments
                 recovered_content = self._try_recover_content(message_data)
                 if recovered_content:
-                    content = recovered_content
-                    print(f"Recovered content: {content}")
-            
-            # Using REST API to get full message details (if enabled)
-            if self.use_rest_api:
-                self._fetch_message_details(channel_id, message_id)
-            else:
-                print("\nNote: REST API message retrieval is disabled, using only WebSocket received data")
-            
-            # We already know this channel is in our monitoring list (checked at the beginning)
-            print(f"{Colors.GREEN}Channel {channel_name} ({channel_id}) is in our monitoring list{Colors.RESET}")
-            
-            # Check if message has already been processed
-            if message_id not in self.processed_message_ids:
-                # Add to processed message set
-                self.processed_message_ids.add(message_id)
-                
-                # Limit processed message count
-                if len(self.processed_message_ids) > 1000:
-                    old_ids = list(self.processed_message_ids)[:500]
-                    for old_id in old_ids:
-                        self.processed_message_ids.remove(old_id)
-                
-                # Process different types of message content
-                content_preview = ""
-                if content:
-                    content_preview = content[:200] + ("..." if len(content) > 200 else "")
-                
-                # Check if message contains attachments
+                    print(f"\n{Colors.GREEN}{recovered_content}{Colors.RESET}")
+                else:
+                    print(f"{Colors.YELLOW}[Message without text content]{Colors.RESET}")
+                    
+                # Check for media attachments
                 attachments = message_data.get("attachments", [])
-                has_attachments = len(attachments) > 0
-                
-                # Check if message contains embeds
-                embeds = message_data.get("embeds", [])
-                has_embeds = len(embeds) > 0
-                
-                # Log detailed message information
-                print(f"\nMessage details:")
-                print(f"Message ID: {message_id}")
-                print(f"Sender: {author}")
-                print(f"Channel: {channel_name} ({channel_id})")
-                print(f"Content: {content_preview}")
-                
-                if has_attachments:
-                    print(f"Attachments count: {len(attachments)}")
-                    for i, attachment in enumerate(attachments):
-                        print(f"Attachment {i+1}: {attachment.get('url', 'unknown')}")
-                
-                if has_embeds:
-                    print(f"Embeds count: {len(embeds)}")
-                    for i, embed in enumerate(embeds):
-                        print(f"Embed {i+1} title: {embed.get('title', 'unknown')}")
-                
-                # Combine various possible content for signal detection
-                combined_content = content
-                
-                # If there are embeds, add them to detection scope
-                for embed in embeds:
-                    if "title" in embed:
-                        combined_content += " " + embed["title"]
-                    if "description" in embed:
-                        combined_content += " " + embed["description"]
-                
-                # Check if contains trading signal keywords
-                if combined_content and self._is_trading_signal(combined_content):
-                    print(f"Trading signal detected! ID: {message_id}")
-                    self.signal_callback(message_data)
-            else:
-                print(f"Message {message_id} already processed, skipping")
+                if attachments:
+                    print(f"{Colors.YELLOW}[Contains {len(attachments)} attachments]{Colors.RESET}")
             
-            # Calculate and display latency
-            end_time = time.time()
-            latency = (end_time - start_time) * 1000  # Convert to milliseconds
-            print(f"{Colors.CYAN}Message processing latency: {latency:.2f} ms{Colors.RESET}")
+            # Only highlight if trading signal found
+            combined_content = content
+            
+            # Include embeds in signal detection
+            embeds = message_data.get("embeds", [])
+            for embed in embeds:
+                if "title" in embed:
+                    combined_content += " " + embed["title"]
+                if "description" in embed:
+                    combined_content += " " + embed["description"]
+            
+            # Check if contains trading signal keywords - HIGHLIGHT IMPORTANT SIGNALS
+            if combined_content and self._is_trading_signal(combined_content):
+                print(f"\n{Colors.YELLOW}!!! TRADING SIGNAL DETECTED !!!{Colors.RESET}")
+                matched_kw = [kw for kw in self.signal_keywords if kw in combined_content.lower()]
+                print(f"{Colors.YELLOW}Matched keywords: {', '.join(matched_kw)}{Colors.RESET}")
+                self.signal_callback(message_data)
+                
+            # End with a short separator
+            print(f"{Colors.MAGENTA}{'='*60}{Colors.RESET}")
             
         except Exception as e:
             print(f"Error processing message: {str(e)}")
@@ -448,7 +405,7 @@ class MessageProcessor:
 class DiscordGateway:
     """Discord Gateway client"""
     
-    def __init__(self, token: str, message_callback: Callable[[Dict[str, Any]], None]):
+    def __init__(self, token: str, message_callback: Callable[[Dict[str, Any]], None], channel_ids: List[str] = None):
         self.token = token
         self.message_callback = message_callback
         self.ws = None
@@ -462,6 +419,17 @@ class DiscordGateway:
         # Channel and guild cache
         self.channel_names = {}  # Map of channel_id -> name
         self.guild_names = {}    # Map of guild_id -> name
+        
+        # 直接存储监控的频道ID - 不再依赖message_callback
+        self.monitored_channel_ids = []
+        # 首先，使用传入的参数
+        if channel_ids:
+            self.monitored_channel_ids = [str(cid) for cid in channel_ids]
+        # 如果没有直接传入，尝试从message_callback获取
+        elif hasattr(message_callback, 'channel_ids'):
+            self.monitored_channel_ids = [str(cid) for cid in message_callback.channel_ids]
+            
+        print(f"{Colors.GREEN}DiscordGateway initialized with {len(self.monitored_channel_ids)} monitored channels: {self.monitored_channel_ids}{Colors.RESET}")
         
     def start(self):
         self.running = True
@@ -519,43 +487,38 @@ class DiscordGateway:
     
     def _on_message(self, ws, message):
         try:
-            # Print raw WebSocket response
-            print(f"\n{Colors.RED}{'='*40} DISCORD WEBSOCKET RAW MESSAGE {'='*40}")
-            print(message)
-            print(f"{'='*100}{Colors.RESET}")
-            
+            # Parse the message data
             data = json.loads(message)
             op_code = data["op"]
             
-            # Print formatted message data
-            print(f"\n{Colors.GREEN}Formatted WebSocket message:{Colors.RESET}")
-            print(f"Op code: {op_code}")
+            # 添加所有事件的调试日志
+            event_type = data.get("t", "NO_EVENT_TYPE")
+            print(f"\n{Colors.YELLOW}DEBUG: Received event: {event_type} (op: {op_code}){Colors.RESET}")
             
-            # Show different operation types based on op_code
-            op_types = {
-                0: "DISPATCH (Event)",
-                1: "HEARTBEAT",
-                2: "IDENTIFY",
-                3: "PRESENCE UPDATE",
-                6: "RESUME",
-                7: "RECONNECT",
-                9: "INVALID SESSION",
-                10: "HELLO",
-                11: "HEARTBEAT ACK"
-            }
-            print(f"Operation type: {op_types.get(op_code, 'UNKNOWN')}")
+            # Only show critical websocket events and completely hide routine ones
+            is_critical_event = False
             
-            # Update sequence number
-            if "s" in data and data["s"] is not None:
-                self.last_sequence = data["s"]
-                print(f"Sequence number: {self.last_sequence}")
+            # Critical events: connection errors, invalid session, etc.
+            if op_code in [9, 7, 4] or ('t' in data and data['t'] == 'ERROR'):
+                is_critical_event = True
+                
+            # Show minimal info for critical websocket events, hide others completely
+            if is_critical_event:
+                print(f"\n{Colors.RED}Critical Discord Event - Code: {op_code}{Colors.RESET}")
+                op_types = {
+                    0: "DISPATCH", 1: "HEARTBEAT", 2: "IDENTIFY", 3: "PRESENCE UPDATE",
+                    6: "RESUME", 7: "RECONNECT", 9: "INVALID SESSION", 10: "HELLO",
+                    11: "HEARTBEAT ACK"
+                }
+                print(f"Type: {op_types.get(op_code, 'UNKNOWN')}")
             
-            # Handle different op codes
-            if op_code == 10:  # Hello
-                # Get heartbeat interval but override to 60 seconds
+            # Completely suppress logs for heartbeat ACKs and routine events
+            if op_code == 11:  # Heartbeat ACK
+                pass 
+            elif op_code == 10:  # Hello - just show minimal connection info
                 original_interval = data["d"]["heartbeat_interval"] / 1000
                 self.heartbeat_interval = 60.0  # Fixed at 60 seconds
-                print(f"Heartbeat interval: {original_interval} seconds (overridden to fixed value 60 seconds)")
+                print(f"Connected to Discord Gateway (heartbeat: 60s)")
                 self._start_heartbeat()
                 
                 # Try to resume session or send identification
@@ -564,71 +527,118 @@ class DiscordGateway:
                 else:
                     self._send_identify()
                     
-            elif op_code == 11:  # Heartbeat ACK
-                # No output for successful heartbeat acknowledgment
-                pass
+            elif op_code == 9:  # Invalid session (critical error)
+                resumable = data.get('d', False)
+                print(f"{Colors.RED}INVALID SESSION ERROR (resumable: {resumable}){Colors.RESET}")
+                
+                # Force a new identification after a brief delay
+                time.sleep(1)
+                self.session_id = None
+                self._send_identify()
+                
+            elif op_code == 7:  # Reconnect
+                print(f"{Colors.YELLOW}Discord requested reconnection.{Colors.RESET}")
+                if self.ws:
+                    self.ws.close()
                 
             elif op_code == 0:  # Dispatch
                 event_type = data["t"]
-                print(f"Event type: {event_type}")
                 
-                # Save session ID
+                # 记录所有收到的事件类型，包括MESSAGE_CREATE
+                print(f"{Colors.YELLOW}DEBUG: Dispatch event: {event_type}{Colors.RESET}")
+                
+                # Only show specific events we care about
                 if event_type == "READY":
                     self.session_id = data["d"]["session_id"]
-                    self.reconnect_count = 0  # Reset reconnect count
+                    self.reconnect_count = 0
                     user_name = data['d']['user']['username']
-                    print(f"Successfully connected to Discord! User: {user_name}")
-                    print(f"Session ID: {self.session_id}")
+                    print(f"{Colors.GREEN}Successfully connected as user: {user_name}{Colors.RESET}")
                     
-                    # Process guild and channel information
+                    # Process guild and channel information but don't show logs for it
                     self._process_guilds_and_channels(data['d'])
                     
-                    # If MessageCallback has set_current_user method, call it
+                    # Set current user if needed
                     if hasattr(self.message_callback, 'set_current_user'):
                         self.message_callback.set_current_user(user_name)
                 
-                # Handle Guild Create events to update channel info
+                # Handle errors but don't log normal events
+                elif event_type == "ERROR":
+                    print(f"{Colors.RED}ERROR EVENT RECEIVED:{Colors.RESET}")
+                    print(f"{Colors.RED}{json.dumps(data['d'], indent=2)}{Colors.RESET}")
+                
+                # Update channel info silently, only log monitored channels
                 elif event_type == "GUILD_CREATE":
                     guild_id = data['d'].get('id')
                     guild_name = data['d'].get('name')
                     if guild_id and guild_name:
                         self.guild_names[guild_id] = guild_name
-                        print(f"Added guild to cache: {guild_name} ({guild_id})")
                         
-                    # Process channels in this guild
+                    # Process channels silently, only show monitored ones
                     channels = data['d'].get('channels', [])
+                    monitored_in_guild = []
                     for channel in channels:
                         channel_id = channel.get('id')
                         channel_name = channel.get('name')
                         if channel_id and channel_name:
                             self.channel_names[channel_id] = channel_name
-                            print(f"Added channel to cache: {channel_name} ({channel_id})")
+                            # Only collect monitored channels
+                            if str(channel_id) in self.monitored_channel_ids:
+                                monitored_in_guild.append(f"{Colors.CYAN}→ Monitoring: {channel_name} ({channel_id}) in {guild_name}{Colors.RESET}")
                     
-                # Handle new message event
+                    # Only print if we found monitored channels in this guild
+                    if monitored_in_guild:
+                        print(f"\n{Colors.GREEN}Found monitored channels in {guild_name}:{Colors.RESET}")
+                        for channel_info in monitored_in_guild:
+                            print(channel_info)
+                    
+                # Process actual messages (what we really care about)
                 elif event_type == "MESSAGE_CREATE":
-                    # Get channel name if available in cache
-                    channel_id = data['d'].get('channel_id', 'unknown')
-                    guild_id = data['d'].get('guild_id', 'unknown')
+                    channel_id = data['d'].get('channel_id', "unknown")
+                    author = data['d'].get('author', {}).get('username', 'unknown')
+                    content = data['d'].get('content', '[No content]')
                     
-                    channel_name = self.channel_names.get(channel_id, "Unknown Channel")
-                    guild_name = self.guild_names.get(guild_id, "Unknown Server")
+                    # 打印出所有MESSAGE_CREATE事件的基本信息，不管是否是监控的频道
+                    print(f"\n{Colors.MAGENTA}DEBUG: MESSAGE_CREATE - Channel: {channel_id}, Author: {author}{Colors.RESET}")
+                    print(f"{Colors.MAGENTA}Message content preview: {content[:30]}...{Colors.RESET}")
                     
-                    print("\nReceived new message event:")
-                    print(f"Channel: {channel_name} ({channel_id})")
-                    print(f"Server: {guild_name} ({guild_id})")
-                    print(f"Author: {data['d'].get('author', {}).get('username', 'unknown')}")
-                    print(f"Message ID: {data['d'].get('id', 'unknown')}")
+                    # 只检查本地存储的监控频道ID列表 - 确认目前有多少个监控的频道
+                    if len(self.monitored_channel_ids) > 0:
+                        print(f"{Colors.YELLOW}DEBUG: Monitoring {len(self.monitored_channel_ids)} channels: {self.monitored_channel_ids}{Colors.RESET}")
+                    else:
+                        print(f"{Colors.RED}WARNING: No channels are being monitored!{Colors.RESET}")
                     
-                    # Add channel info to message data for the processor
-                    if 'd' in data:
-                        data['d']['_channel_name'] = channel_name
-                        data['d']['_guild_name'] = guild_name
+                    # Only process if message is from monitored channel
+                    # 简化检查逻辑 - 只依赖本地存储的频道ID
+                    channel_id_str = str(channel_id)
+                    is_monitored = channel_id_str in self.monitored_channel_ids
                     
-                    # Process message
-                    self.message_callback(data["d"])
+                    if is_monitored:
+                        print(f"{Colors.GREEN}Message is from monitored channel - Processing{Colors.RESET}")
+                        # Get channel name if available
+                        channel_name = self.channel_names.get(channel_id, "Unknown Channel")
+                        guild_id = data['d'].get('guild_id', "unknown")
+                        guild_name = self.guild_names.get(guild_id, "Unknown Server")
+                        
+                        # Add info to message data
+                        if 'd' in data:
+                            data['d']['_channel_name'] = channel_name
+                            data['d']['_guild_name'] = guild_name
+                        
+                        # Process message without extra logs
+                        self.message_callback(data["d"])
+                    else:
+                        print(f"{Colors.YELLOW}Message is NOT from monitored channel - Ignoring{Colors.RESET}")
+                        print(f"{Colors.YELLOW}Expected one of: {self.monitored_channel_ids}{Colors.RESET}")
+                        print(f"{Colors.YELLOW}Received: {channel_id}{Colors.RESET}")
+            
+            # Look for error fields in any response
+            if 'error' in data:
+                print(f"{Colors.RED}ERROR RESPONSE: {json.dumps(data['error'], indent=2)}{Colors.RESET}")
+            if 'message' in data and op_code != 0:  # Don't include message field for normal messages
+                print(f"{Colors.RED}ERROR MESSAGE: {data['message']}{Colors.RESET}")
                     
         except Exception as e:
-            print(f"Error processing WebSocket message: {str(e)}")
+            print(f"Error processing message: {str(e)}")
             import traceback
             traceback.print_exc()
     
@@ -636,7 +646,24 @@ class DiscordGateway:
         print(f"WebSocket error: {str(error)}")
     
     def _on_close(self, ws, close_status_code, close_msg):
-        print(f"WebSocket connection closed: {close_status_code} - {close_msg}")
+        # Only print detailed error information for non-normal closures
+        if close_status_code != 1000:  # 1000 is normal closure
+            print(f"{Colors.RED}WebSocket connection closed: {close_status_code} - {close_msg}{Colors.RESET}")
+            
+            # Display more detailed information about known error codes
+            if close_status_code == 4004:
+                print(f"{Colors.RED}ERROR DETAILS: Authentication failed. The token you provided is invalid.{Colors.RESET}")
+                print(f"{Colors.RED}Token starts with: {self.token[:10]}...{Colors.RESET}")
+                # More specific information only for authentication errors
+                if self.token.startswith("MTk") or self.token.startswith("MTE") or self.token.startswith("MTI"):
+                    print(f"{Colors.YELLOW}You're using what appears to be a user token.{Colors.RESET}")
+                    print(f"{Colors.YELLOW}Discord has been increasingly restricting user token usage.{Colors.RESET}")
+                elif self.token.startswith("OD"):
+                    print(f"{Colors.YELLOW}You're using what appears to be an older format token.{Colors.RESET}")
+            # Only print the most critical error messages, omitting general advice
+        else:
+            print("WebSocket connection closed normally")
+            
         if self.running:
             self._schedule_reconnect()
     
@@ -658,7 +685,8 @@ class DiscordGateway:
         if self.heartbeat_thread and self.heartbeat_thread.is_alive():
             return
             
-        print(f"Starting heartbeat thread, fixed interval: 60 seconds")
+        # Simplified heartbeat start message
+        print(f"Starting heartbeat (interval: 60 seconds)")
         self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop)
         self.heartbeat_thread.daemon = True
         self.heartbeat_thread.start()
@@ -678,29 +706,56 @@ class DiscordGateway:
                 break
     
     def _send_identify(self):
-        # Increase intents value to include more permissions
-        # Base intents (513) + MESSAGE_CONTENT (32768) + GUILD_MEMBERS (2)
-        # 33283 = GUILDS (1) + GUILD_MESSAGES (512) + MESSAGE_CONTENT (32768) + GUILD_MEMBERS (2)
-        intents = 33283  
+        # 增加MESSAGE_CONTENT (1 << 15)权限，确保有权读取消息内容
+        # 1 << 0 (GUILDS), 1 << 9 (GUILD_MESSAGES), 1 << 15 (MESSAGE_CONTENT)
+        intents = 33283  # 使用更高的intents值
+        
+        # 打印当前使用的intents值
+        print(f"{Colors.YELLOW}Using Discord intents: {intents} (includes MESSAGE_CONTENT){Colors.RESET}")
+        
+        # Very minimal identification info
+        print(f"Authenticating with Discord...")
         
         payload = {
             "op": 2,  # Identify
             "d": {
                 "token": self.token,
+                "intents": intents,  # 确保包含intents字段
                 "properties": {
-                    "$os": "macOS",
-                    "$browser": "chrome",
-                    "$device": "pc"
+                    "$os": "iOS",
+                    "$browser": "Discord iOS",
+                    "$device": "iPhone14,3",
+                    "browser_user_agent": "Discord-iOS/191.0 (iPhone; iOS 16.5; Scale/3.00)",
+                    "browser_version": "191.0",
+                    "os_version": "16.5",
+                    "referrer": "",
+                    "referring_domain": "",
+                    "referrer_current": "",
+                    "referring_domain_current": "",
+                    "release_channel": "stable",
+                    "client_build_number": 191,
+                    "client_event_source": None
                 },
-                "intents": intents,  # Use higher intents value
+                "capabilities": 4093,
                 "presence": {
                     "status": "online",
+                    "since": 0,
+                    "activities": [],
                     "afk": False
+                },
+                "compress": False,
+                "client_state": {
+                    "guild_versions": {},
+                    "highest_last_message_id": "0",
+                    "read_state_version": 0,
+                    "user_guild_settings_version": -1,
+                    "user_settings_version": -1,
+                    "private_channels_version": "0",
+                    "api_code_version": 0
                 }
             }
         }
         
-        print(f"Sending identification... intents: {intents}")
         self.ws.send(json.dumps(payload))
     
     def _send_resume(self):
@@ -719,9 +774,8 @@ class DiscordGateway:
     def _process_guilds_and_channels(self, ready_data):
         """Process guild and channel information from READY event"""
         try:
-            # Process guilds
+            # Process guilds and channels silently (no logs for each channel)
             guilds = ready_data.get('guilds', [])
-            print(f"Processing information for {len(guilds)} servers...")
             
             for guild in guilds:
                 guild_id = guild.get('id')
@@ -730,7 +784,6 @@ class DiscordGateway:
                 if guild_id and guild_name:
                     self.guild_names[guild_id] = guild_name
                     
-                # Channels might be in the guild object in READY event
                 channels = guild.get('channels', [])
                 for channel in channels:
                     channel_id = channel.get('id')
@@ -738,17 +791,38 @@ class DiscordGateway:
                     if channel_id and channel_name:
                         self.channel_names[channel_id] = channel_name
             
-            # Log the monitored channels that we have names for
-            print(f"\n{Colors.CYAN}Known Channel Information:{Colors.RESET}")
-            for channel_id, channel_name in self.channel_names.items():
-                guild_id = next((g_id for g_id, _ in self.guild_names.items() 
-                               if any(c.get('id') == channel_id for c in next((g for g in guilds if g.get('id') == g_id), {}).get('channels', []))), 
-                               "Unknown Server")
-                guild_name = self.guild_names.get(guild_id, "Unknown Server")
-                print(f"Channel: {channel_name} ({channel_id}) in Server: {guild_name}")
+            # Only show monitored channels
+            if hasattr(self.message_callback, 'channel_ids'):
+                monitored_channels = self.message_callback.channel_ids
                 
+                print(f"\n{Colors.GREEN}{'='*20} MONITORED CHANNELS {'='*20}{Colors.RESET}")
+                
+                # Check if we have any channel names
+                found_any = False
+                for channel_id in monitored_channels:
+                    channel_name = self.channel_names.get(channel_id, "Unknown Channel")
+                    guild_id = None
+                    
+                    # Find channel's guild
+                    for g in guilds:
+                        if any(c.get('id') == channel_id for c in g.get('channels', [])):
+                            guild_id = g.get('id')
+                            break
+                    
+                    guild_name = self.guild_names.get(guild_id, "Unknown Server") if guild_id else "Unknown Server"
+                    print(f"{Colors.CYAN}→ {channel_name} ({channel_id}) in {guild_name}{Colors.RESET}")
+                    found_any = True
+                
+                if not found_any:
+                    print(f"{Colors.YELLOW}No channel names found yet. Names will appear as messages arrive.{Colors.RESET}")
+                    for channel_id in monitored_channels:
+                        print(f"{Colors.CYAN}→ Channel ID: {channel_id}{Colors.RESET}")
+                
+                print(f"{Colors.GREEN}{'='*57}{Colors.RESET}")
+                print(f"{Colors.YELLOW}Waiting for messages in monitored channels...{Colors.RESET}")
+            
         except Exception as e:
-            print(f"Error processing guild data: {str(e)}")
+            print(f"Error processing channels: {str(e)}")
     
     def get_channel_name(self, channel_id: str) -> str:
         """Get channel name from cache or fetch from API if needed"""
@@ -758,7 +832,13 @@ class DiscordGateway:
         # If not in cache, try to fetch from API
         try:
             api_url = f"https://discord.com/api/v9/channels/{channel_id}"
-            headers = {"Authorization": self.token}
+            # Determine if we need to add "Bot " prefix
+            auth_header = self.token
+            if self.token.startswith("OD") or self.token.startswith("MT"):
+                if not self.token.startswith("Bot "):
+                    auth_header = self.token  # User token doesn't need prefix
+            
+            headers = {"Authorization": auth_header}
             
             response = requests.get(api_url, headers=headers)
             if response.status_code == 200:
@@ -801,14 +881,20 @@ class DiscordListener:
             use_rest_api=False  # Disable REST API calls
         )
         
-        # Create Gateway client
-        self.gateway = DiscordGateway(token, self.message_processor.process_message)
+        # Create Gateway client - 直接传入监控的频道ID
+        self.gateway = DiscordGateway(token, self.message_processor.process_message, channel_ids)
         
         # Signal log file
         self.signal_log_path = "logs/trading_signals.log"
         os.makedirs(os.path.dirname(self.signal_log_path), exist_ok=True)
         
         self.running = False
+    
+    def get_channel_name(self, channel_id: str) -> str:
+        """Get channel name from the gateway's cache or return the ID if not available yet"""
+        if hasattr(self.gateway, 'get_channel_name'):
+            return self.gateway.get_channel_name(channel_id)
+        return f"Channel {channel_id}"
     
     def start(self):
         if self.running:
@@ -825,7 +911,15 @@ class DiscordListener:
         self.running = True
         self.gateway.start()
         
-        print(f"Discord listening service started, monitoring channels: {self.channel_ids}")
+        # Get channel names when possible
+        channel_info = []
+        for channel_id in self.channel_ids:
+            channel_name = self.get_channel_name(channel_id)
+            channel_info.append(f"{channel_name} ({channel_id})")
+        
+        print(f"{Colors.GREEN}Discord listening service started, monitoring channels:{Colors.RESET}")
+        for info in channel_info:
+            print(f"{Colors.CYAN}→ {info}{Colors.RESET}")
     
     def stop(self):
         if not self.running:
@@ -956,7 +1050,20 @@ def main():
     # Output startup information
     print(f"{Colors.CYAN}========== Discord Trading Signal Monitor =========={Colors.RESET}")
     print(f"Configuration file: {args.config}")
-    print(f"Monitoring {len(config.get('discord.channel_ids', []))} channels")
+    
+    # Highlight monitored channel IDs (make it very clear)
+    channel_ids = config.get('discord.channel_ids', [])
+    if not channel_ids:
+        print(f"{Colors.RED}ERROR: No channels specified for monitoring!{Colors.RESET}")
+        print(f"{Colors.RED}Please add channel IDs to your configuration:{Colors.RESET}")
+        print(f"{Colors.YELLOW}discord:{Colors.RESET}")
+        print(f"{Colors.YELLOW}  channel_ids:{Colors.RESET}")
+        print(f"{Colors.YELLOW}    - \"YOUR_CHANNEL_ID_HERE\"{Colors.RESET}")
+        sys.exit(1)
+    
+    print(f"{Colors.GREEN}Monitoring {len(channel_ids)} channels:{Colors.RESET}")
+    for channel_id in channel_ids:
+        print(f"{Colors.CYAN}- {channel_id}{Colors.RESET}")
     
     # Set up notification service
     notification_service = NotificationService()
