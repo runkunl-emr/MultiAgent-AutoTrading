@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: quant_trading_bot
+Version: 0.1
+Requires-Dist: websocket-client>=1.4.0
+Requires-Dist: pyyaml>=6.0.0
+Requires-Dist: requests>=2.28.0
+Dynamic: requires-dist
