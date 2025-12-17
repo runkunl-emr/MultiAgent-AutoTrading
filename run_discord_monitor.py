@@ -13,6 +13,7 @@ import time
 import threading
 import json
 import datetime
+import re
 from typing import Dict, Any, Set, List, Callable, Optional
 import platform
 import websocket
@@ -37,11 +38,8 @@ class ConfigManager:
             "discord": {
                 "token": "",
                 "channel_ids": [],
-<<<<<<< HEAD
-=======
                 "destination_channel_id": "",  # Optional destination channel for forwarding
                 "user_filters": {},  # Optional: {channel_id: [username1, username2]} - only listen to specific users in channels
->>>>>>> 3cdedc4 (change monitor and add ai summary bot)
                 "signal_keywords": ["buy", "sell", "long", "short", "signal", "trading", "trade", "entry", "bullish", "bearish"]
             },
             "notification": {
@@ -195,13 +193,9 @@ class MessageProcessor:
     """Message processor"""
     
     def __init__(self, channel_ids: List[str], signal_keywords: List[str], 
-<<<<<<< HEAD
-                 signal_callback: Callable[[Dict[str, Any]], None], token: str, use_rest_api: bool = False):
-=======
                  signal_callback: Callable[[Dict[str, Any]], None], token: str, 
                  use_rest_api: bool = False, destination_channel_id: Optional[str] = None,
                  user_filters: Optional[Dict[str, List[str]]] = None):
->>>>>>> 3cdedc4 (change monitor and add ai summary bot)
         self.channel_ids = channel_ids
         self.signal_keywords = [kw.lower() for kw in signal_keywords]
         self.signal_callback = signal_callback
@@ -209,14 +203,11 @@ class MessageProcessor:
         self.token = token  # Store token for REST API calls
         self.use_rest_api = use_rest_api  # Control whether to use REST API
         self.current_user = None  # Store current username to compare message sender
-<<<<<<< HEAD
-=======
         self.destination_channel_id = destination_channel_id  # Channel to forward messages to
         # User filters: {channel_id: [username1, username2, ...]}
         # If a channel has user filters, only messages from those users will be processed
         # If None or empty list, all users are allowed
         self.user_filters = user_filters or {}
->>>>>>> 3cdedc4 (change monitor and add ai summary bot)
         # Print only monitored channel IDs without extra text
         for channel_id in channel_ids:
             if channel_id not in self.channel_ids:
@@ -327,9 +318,32 @@ class MessageProcessor:
                 if "description" in embed:
                     combined_content += " " + embed["description"]
             
-            # Forward message to destination channel if configured
-            if self.destination_channel_id:
-                self._forward_message(message_data, combined_content or content)
+            # 只转发包含数字或图片的消息（过滤普通对话）
+            # Only forward messages containing numbers or images (filter out normal conversations)
+            combined_content_for_check = combined_content or content or ""
+            has_numbers = re.search(r'\d', combined_content_for_check) is not None
+            
+            # 检查是否有图片附件
+            attachments = message_data.get("attachments", [])
+            has_images = False
+            if attachments:
+                # 检查附件是否为图片格式
+                image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
+                for att in attachments:
+                    filename = att.get("filename", "").lower()
+                    content_type = att.get("content_type", "").lower()
+                    if any(filename.endswith(ext) for ext in image_extensions) or \
+                       "image" in content_type:
+                        has_images = True
+                        break
+            
+            # 如果包含数字或图片，则转发
+            if has_numbers or has_images:
+                if self.destination_channel_id:
+                    self._forward_message(message_data, combined_content or content)
+            else:
+                # 消息不包含数字或图片，跳过转发
+                print(f"{Colors.YELLOW}[消息已过滤 - 未检测到数字或图片（可能是普通对话）]{Colors.RESET}")
             
             # Check if contains trading signal keywords - HIGHLIGHT IMPORTANT SIGNALS
             if combined_content and self._is_trading_signal(combined_content):
@@ -434,8 +448,6 @@ class MessageProcessor:
         except Exception as e:
             print(f"Error recovering content: {str(e)}")
             return None
-<<<<<<< HEAD
-=======
     
     def _forward_message(self, message_data: Dict[str, Any], content: str):
         """Forward message to destination channel with images and attachments"""
@@ -554,7 +566,6 @@ class MessageProcessor:
             print(f"{Colors.RED}Error forwarding message: {str(e)}{Colors.RESET}")
             import traceback
             traceback.print_exc()
->>>>>>> 3cdedc4 (change monitor and add ai summary bot)
 
 class DiscordGateway:
     """Discord Gateway client"""
@@ -1011,13 +1022,9 @@ class DiscordListener:
     
     def __init__(self, token: str, channel_ids: List[str],
                  signal_keywords: List[str],
-<<<<<<< HEAD
-                 notification_service: NotificationService):
-=======
                  notification_service: NotificationService,
                  destination_channel_id: Optional[str] = None,
                  user_filters: Optional[Dict[str, List[str]]] = None):
->>>>>>> 3cdedc4 (change monitor and add ai summary bot)
         """
         Initialize Discord listener
         
@@ -1026,21 +1033,15 @@ class DiscordListener:
             channel_ids: List of channel IDs to listen to
             signal_keywords: List of trading signal keywords
             notification_service: Notification service
-<<<<<<< HEAD
-=======
             destination_channel_id: Optional channel ID to forward messages to
             user_filters: Optional dict mapping channel_id to list of usernames to filter
->>>>>>> 3cdedc4 (change monitor and add ai summary bot)
         """
         self.token = token
         self.channel_ids = channel_ids
         self.signal_keywords = signal_keywords
         self.notification_service = notification_service
-<<<<<<< HEAD
-=======
         self.destination_channel_id = destination_channel_id
         self.user_filters = user_filters or {}
->>>>>>> 3cdedc4 (change monitor and add ai summary bot)
         
         # Message processor
         self.message_processor = MessageProcessor(
@@ -1048,13 +1049,9 @@ class DiscordListener:
             signal_keywords=signal_keywords,
             signal_callback=self._handle_trading_signal,
             token=token,
-<<<<<<< HEAD
-            use_rest_api=False  # Disable REST API calls
-=======
             use_rest_api=False,  # Disable REST API calls
             destination_channel_id=destination_channel_id,
             user_filters=self.user_filters
->>>>>>> 3cdedc4 (change monitor and add ai summary bot)
         )
         
         # Create Gateway client - 直接传入监控的频道ID
@@ -1096,13 +1093,10 @@ class DiscordListener:
         print(f"{Colors.GREEN}Discord listening service started, monitoring channels:{Colors.RESET}")
         for info in channel_info:
             print(f"{Colors.CYAN}→ {info}{Colors.RESET}")
-<<<<<<< HEAD
-=======
         
         if self.destination_channel_id:
             dest_name = self.get_channel_name(self.destination_channel_id)
             print(f"{Colors.GREEN}Messages will be forwarded to: {dest_name} ({self.destination_channel_id}){Colors.RESET}")
->>>>>>> 3cdedc4 (change monitor and add ai summary bot)
     
     def stop(self):
         if not self.running:
@@ -1254,14 +1248,6 @@ def main():
         notification_service.add_adapter(MacNotificationAdapter(sound_name="Submarine"))
     notification_service.add_adapter(ConsoleNotificationAdapter())
     
-<<<<<<< HEAD
-    # Create and start listening service
-    try:
-        listener = DiscordListener(config.get("discord.token"), config.get("discord.channel_ids", []),
-                                  config.get("discord.signal_keywords", []), notification_service)
-        listener.start()
-        
-=======
     # Get destination channel ID if configured
     destination_channel_id = config.get("discord.destination_channel_id")
     
@@ -1287,7 +1273,6 @@ def main():
                 channel_name = listener.get_channel_name(channel_id) if hasattr(listener, 'get_channel_name') else channel_id
                 print(f"{Colors.CYAN}  Channel {channel_name}: Only listening to {', '.join(users)}{Colors.RESET}")
         
->>>>>>> 3cdedc4 (change monitor and add ai summary bot)
         # Handle signals
         def signal_handler(sig, frame):
             print("Received exit signal, stopping...")
