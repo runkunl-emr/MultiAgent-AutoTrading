@@ -37,6 +37,11 @@ class ConfigManager:
             "discord": {
                 "token": "",
                 "channel_ids": [],
+<<<<<<< HEAD
+=======
+                "destination_channel_id": "",  # Optional destination channel for forwarding
+                "user_filters": {},  # Optional: {channel_id: [username1, username2]} - only listen to specific users in channels
+>>>>>>> 3cdedc4 (change monitor and add ai summary bot)
                 "signal_keywords": ["buy", "sell", "long", "short", "signal", "trading", "trade", "entry", "bullish", "bearish"]
             },
             "notification": {
@@ -190,7 +195,13 @@ class MessageProcessor:
     """Message processor"""
     
     def __init__(self, channel_ids: List[str], signal_keywords: List[str], 
+<<<<<<< HEAD
                  signal_callback: Callable[[Dict[str, Any]], None], token: str, use_rest_api: bool = False):
+=======
+                 signal_callback: Callable[[Dict[str, Any]], None], token: str, 
+                 use_rest_api: bool = False, destination_channel_id: Optional[str] = None,
+                 user_filters: Optional[Dict[str, List[str]]] = None):
+>>>>>>> 3cdedc4 (change monitor and add ai summary bot)
         self.channel_ids = channel_ids
         self.signal_keywords = [kw.lower() for kw in signal_keywords]
         self.signal_callback = signal_callback
@@ -198,6 +209,14 @@ class MessageProcessor:
         self.token = token  # Store token for REST API calls
         self.use_rest_api = use_rest_api  # Control whether to use REST API
         self.current_user = None  # Store current username to compare message sender
+<<<<<<< HEAD
+=======
+        self.destination_channel_id = destination_channel_id  # Channel to forward messages to
+        # User filters: {channel_id: [username1, username2, ...]}
+        # If a channel has user filters, only messages from those users will be processed
+        # If None or empty list, all users are allowed
+        self.user_filters = user_filters or {}
+>>>>>>> 3cdedc4 (change monitor and add ai summary bot)
         # Print only monitored channel IDs without extra text
         for channel_id in channel_ids:
             if channel_id not in self.channel_ids:
@@ -228,12 +247,22 @@ class MessageProcessor:
             if not is_monitored:
                 return
             
-            # Start timing for latency measurement
-            start_time = time.time()
-            
-            # Get essential message data
+            # Get essential message data (need author for user filter check)
             content = message_data.get("content", "")
             author = message_data.get("author", {}).get("username", "unknown")
+            
+            # Check user filter for this channel
+            # If channel has user filters, only process messages from allowed users
+            if channel_id_str in self.user_filters:
+                allowed_users = [u.lower() for u in self.user_filters[channel_id_str]]
+                author_lower = author.lower()
+                if author_lower not in allowed_users:
+                    # User not in filter list, skip this message
+                    print(f"{Colors.YELLOW}Message from {author} ignored (not in user filter for channel){Colors.RESET}")
+                    return
+            
+            # Start timing for latency measurement
+            start_time = time.time()
             
             # Get channel and guild names if available from gateway
             channel_name = message_data.get("_channel_name", "Unknown Channel")
@@ -297,6 +326,10 @@ class MessageProcessor:
                     combined_content += " " + embed["title"]
                 if "description" in embed:
                     combined_content += " " + embed["description"]
+            
+            # Forward message to destination channel if configured
+            if self.destination_channel_id:
+                self._forward_message(message_data, combined_content or content)
             
             # Check if contains trading signal keywords - HIGHLIGHT IMPORTANT SIGNALS
             if combined_content and self._is_trading_signal(combined_content):
@@ -401,6 +434,127 @@ class MessageProcessor:
         except Exception as e:
             print(f"Error recovering content: {str(e)}")
             return None
+<<<<<<< HEAD
+=======
+    
+    def _forward_message(self, message_data: Dict[str, Any], content: str):
+        """Forward message to destination channel with images and attachments"""
+        try:
+            if not self.destination_channel_id or not self.token:
+                return
+            
+            author = message_data.get("author", {}).get("username", "Unknown")
+            channel_name = message_data.get("_channel_name", "Unknown Channel")
+            
+            # Check for attachments (images, files, etc.)
+            attachments = message_data.get("attachments", [])
+            has_attachments = len(attachments) > 0
+            
+            # Collect attachment URLs for deduplication
+            attachment_urls_set = set()  # Use set to track URLs we've already seen
+            attachment_info = []  # Store (url, filename, content_type) tuples
+            
+            if has_attachments:
+                for att in attachments:
+                    url = att.get("url", "")
+                    filename = att.get("filename", "file")
+                    content_type = att.get("content_type", "image/png")
+                    if url:
+                        # Normalize URL (remove query parameters for comparison)
+                        normalized_url = url.split('?')[0]
+                        attachment_urls_set.add(normalized_url)
+                        attachment_info.append((url, filename, content_type))
+            
+            # Format message to forward
+            forwarded_content = f"**From:** {author} in #{channel_name}\n\n{content}"
+            
+            # Check for embeds with images (but skip if they're already in attachments)
+            embeds = message_data.get("embeds", [])
+            embed_images = []
+            for embed in embeds:
+                # Check embed image
+                if "image" in embed and "url" in embed["image"]:
+                    embed_url = embed["image"]["url"]
+                    normalized_embed_url = embed_url.split('?')[0]
+                    # Only add if not already in attachments
+                    if normalized_embed_url not in attachment_urls_set:
+                        embed_images.append(embed_url)
+                        attachment_urls_set.add(normalized_embed_url)  # Mark as seen
+                
+                # Check embed thumbnail
+                elif "thumbnail" in embed and "url" in embed["thumbnail"]:
+                    thumb_url = embed["thumbnail"]["url"]
+                    normalized_thumb_url = thumb_url.split('?')[0]
+                    # Only add if not already in attachments
+                    if normalized_thumb_url not in attachment_urls_set:
+                        embed_images.append(thumb_url)
+                        attachment_urls_set.add(normalized_thumb_url)  # Mark as seen
+            
+            api_url = f"https://discord.com/api/v10/channels/{self.destination_channel_id}/messages"
+            headers = {"Authorization": self.token}
+            files = []  # Initialize files list
+            
+            # If there are attachments or embed images, use multipart/form-data
+            if has_attachments or embed_images:
+                form_data = {"content": forwarded_content}
+                
+                # Download and attach image files from attachments
+                for idx, (attachment_url, filename, content_type) in enumerate(attachment_info):
+                    try:
+                        if attachment_url:
+                            # Download the image
+                            img_response = requests.get(attachment_url, headers={"Authorization": self.token})
+                            if img_response.status_code == 200:
+                                files.append((
+                                    f"file{idx}",
+                                    (filename, img_response.content, content_type)
+                                ))
+                                print(f"{Colors.CYAN}Downloaded attachment: {filename}{Colors.RESET}")
+                    except Exception as e:
+                        print(f"{Colors.YELLOW}Warning: Could not download attachment {idx}: {str(e)}{Colors.RESET}")
+                
+                # Add embed images as attachments (only if not already in attachments)
+                for idx, img_url in enumerate(embed_images):
+                    try:
+                        img_response = requests.get(img_url, headers={"Authorization": self.token})
+                        if img_response.status_code == 200:
+                            filename = f"embed_image_{idx}.png"
+                            files.append((
+                                f"file{len(attachment_info) + idx}",
+                                (filename, img_response.content, "image/png")
+                            ))
+                            print(f"{Colors.CYAN}Downloaded embed image: {filename}{Colors.RESET}")
+                    except Exception as e:
+                        print(f"{Colors.YELLOW}Warning: Could not download embed image {idx}: {str(e)}{Colors.RESET}")
+                
+                # Send with multipart/form-data
+                if files:
+                    response = requests.post(api_url, headers=headers, data=form_data, files=files)
+                else:
+                    # Fallback to JSON if no files could be downloaded
+                    headers["Content-Type"] = "application/json"
+                    payload = {"content": forwarded_content}
+                    response = requests.post(api_url, headers=headers, json=payload)
+            else:
+                # No attachments, use simple JSON payload
+                headers["Content-Type"] = "application/json"
+                payload = {"content": forwarded_content}
+                response = requests.post(api_url, headers=headers, json=payload)
+            
+            if response.status_code == 200:
+                total_files = len(files) if files else 0
+                if total_files > 0:
+                    print(f"{Colors.GREEN}✓ Message forwarded with {total_files} unique image(s) to destination channel{Colors.RESET}")
+                else:
+                    print(f"{Colors.GREEN}✓ Message forwarded to destination channel{Colors.RESET}")
+            else:
+                print(f"{Colors.RED}✗ Failed to forward message: {response.status_code} - {response.text[:100]}{Colors.RESET}")
+                
+        except Exception as e:
+            print(f"{Colors.RED}Error forwarding message: {str(e)}{Colors.RESET}")
+            import traceback
+            traceback.print_exc()
+>>>>>>> 3cdedc4 (change monitor and add ai summary bot)
 
 class DiscordGateway:
     """Discord Gateway client"""
@@ -857,7 +1011,13 @@ class DiscordListener:
     
     def __init__(self, token: str, channel_ids: List[str],
                  signal_keywords: List[str],
+<<<<<<< HEAD
                  notification_service: NotificationService):
+=======
+                 notification_service: NotificationService,
+                 destination_channel_id: Optional[str] = None,
+                 user_filters: Optional[Dict[str, List[str]]] = None):
+>>>>>>> 3cdedc4 (change monitor and add ai summary bot)
         """
         Initialize Discord listener
         
@@ -866,11 +1026,21 @@ class DiscordListener:
             channel_ids: List of channel IDs to listen to
             signal_keywords: List of trading signal keywords
             notification_service: Notification service
+<<<<<<< HEAD
+=======
+            destination_channel_id: Optional channel ID to forward messages to
+            user_filters: Optional dict mapping channel_id to list of usernames to filter
+>>>>>>> 3cdedc4 (change monitor and add ai summary bot)
         """
         self.token = token
         self.channel_ids = channel_ids
         self.signal_keywords = signal_keywords
         self.notification_service = notification_service
+<<<<<<< HEAD
+=======
+        self.destination_channel_id = destination_channel_id
+        self.user_filters = user_filters or {}
+>>>>>>> 3cdedc4 (change monitor and add ai summary bot)
         
         # Message processor
         self.message_processor = MessageProcessor(
@@ -878,7 +1048,13 @@ class DiscordListener:
             signal_keywords=signal_keywords,
             signal_callback=self._handle_trading_signal,
             token=token,
+<<<<<<< HEAD
             use_rest_api=False  # Disable REST API calls
+=======
+            use_rest_api=False,  # Disable REST API calls
+            destination_channel_id=destination_channel_id,
+            user_filters=self.user_filters
+>>>>>>> 3cdedc4 (change monitor and add ai summary bot)
         )
         
         # Create Gateway client - 直接传入监控的频道ID
@@ -920,6 +1096,13 @@ class DiscordListener:
         print(f"{Colors.GREEN}Discord listening service started, monitoring channels:{Colors.RESET}")
         for info in channel_info:
             print(f"{Colors.CYAN}→ {info}{Colors.RESET}")
+<<<<<<< HEAD
+=======
+        
+        if self.destination_channel_id:
+            dest_name = self.get_channel_name(self.destination_channel_id)
+            print(f"{Colors.GREEN}Messages will be forwarded to: {dest_name} ({self.destination_channel_id}){Colors.RESET}")
+>>>>>>> 3cdedc4 (change monitor and add ai summary bot)
     
     def stop(self):
         if not self.running:
@@ -1071,12 +1254,40 @@ def main():
         notification_service.add_adapter(MacNotificationAdapter(sound_name="Submarine"))
     notification_service.add_adapter(ConsoleNotificationAdapter())
     
+<<<<<<< HEAD
     # Create and start listening service
     try:
         listener = DiscordListener(config.get("discord.token"), config.get("discord.channel_ids", []),
                                   config.get("discord.signal_keywords", []), notification_service)
         listener.start()
         
+=======
+    # Get destination channel ID if configured
+    destination_channel_id = config.get("discord.destination_channel_id")
+    
+    # Get user filters if configured
+    user_filters = config.get("discord.user_filters", {})
+    
+    # Create and start listening service
+    try:
+        listener = DiscordListener(
+            config.get("discord.token"), 
+            config.get("discord.channel_ids", []),
+            config.get("discord.signal_keywords", []), 
+            notification_service,
+            destination_channel_id=destination_channel_id,
+            user_filters=user_filters
+        )
+        listener.start()
+        
+        # Display user filter info if configured
+        if user_filters:
+            print(f"\n{Colors.CYAN}User Filters Active:{Colors.RESET}")
+            for channel_id, users in user_filters.items():
+                channel_name = listener.get_channel_name(channel_id) if hasattr(listener, 'get_channel_name') else channel_id
+                print(f"{Colors.CYAN}  Channel {channel_name}: Only listening to {', '.join(users)}{Colors.RESET}")
+        
+>>>>>>> 3cdedc4 (change monitor and add ai summary bot)
         # Handle signals
         def signal_handler(sig, frame):
             print("Received exit signal, stopping...")

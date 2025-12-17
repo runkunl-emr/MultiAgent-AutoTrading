@@ -4,11 +4,20 @@ discord:
   
   # Channel IDs to monitor (required)
   channel_ids:
-    - "1372032779050684616"  # Replace with your channel ID
+    - "1234567890"
+    - "987651411"
   
   # Destination channel ID to forward messages to (optional)
   # Leave empty or remove this line if you don't want to forward messages
-  destination_channel_id: "1445102817491550392"  # Replace with destination channel ID if you want to forward messages
+  destination_channel_id: ""  # Replace with destination channel ID if you want to forward messages
+  
+  # User filters (optional) - Only listen to specific users in specific channels
+  # Format: channel_id: [username1, username2]
+  # Example: Only listen to "username1" in channel "1372032779050684616"
+  # user_filters:
+  #   "1372032779050684616": ["username1"]
+  # Leave empty or remove if you want to listen to all users
+  user_filters: { "1234567890": ["xxxx"], "987651411": ["xxxx"]}
   
   # Trading signal keywords
   signal_keywords:
