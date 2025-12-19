@@ -466,6 +466,14 @@ class StockMarketAnalyzer:
         for pattern in ticker_patterns:
             matches = re.findall(pattern, content)
             tickers.update(matches)
+        
+        # Filter out common non-ticker words that might be matched (case-insensitive)
+        # "bet" is not a ticker, it means "small position gambling" (case-insensitive)
+        non_tickers = {'BET', 'PUT', 'CALL', 'BUY', 'SELL', 'LONG', 'SHORT', 'AND', 'THE', 'FOR', 'ARE', 'BUT', 'NOT', 'YOU', 'ALL', 'CAN', 'HER', 'WAS', 'ONE', 'OUR', 'OUT', 'DAY', 'GET', 'HAS', 'HIM', 'HIS', 'HOW', 'ITS', 'MAY', 'NEW', 'NOW', 'OLD', 'SEE', 'TWO', 'WAY', 'WHO', 'BOY', 'DID', 'ITS', 'LET', 'SAY', 'SHE', 'TOO', 'USE'}
+        # Convert to uppercase for case-insensitive comparison
+        non_tickers_upper = {t.upper() for t in non_tickers}
+        tickers = {t for t in tickers if t.upper() not in non_tickers_upper}
+        
         return list(tickers)
     
     def extract_orders(self, content: str) -> List[Dict[str, Any]]:
@@ -485,11 +493,23 @@ class StockMarketAnalyzer:
             (r'([A-Z]{1,5})\s+(?:weekly|monthly|daily)?\s*(\d+)([pc])\s+([\d,]+\.?\d*)', 'buy'),  # Options format
             (r'([A-Z]{1,5})\s*(\d+)([pc])\s+([\d,]+\.?\d*)', 'buy'),  # Simplified options
             # Buy patterns - quantity first
-            (r'(?:buy|bought|long|entered|entry|买入|做多|加了一笔|bet)\s+(?:@|at|@|在)?\s*(\d+)\s*(?:shares?|contracts?|股|手|份)?\s*(?:of\s+)?([A-Z]{1,5})\s*(?:@|at|@|在)?\s*\$?([\d,]+\.?\d*)', 'buy'),
+            (r'(?:buy|bought|long|entered|entry|买入|做多|加了一笔)\s+(?:@|at|@|在)?\s*(\d+)\s*(?:shares?|contracts?|股|手|份)?\s*(?:of\s+)?([A-Z]{1,5})\s*(?:@|at|@|在)?\s*\$?([\d,]+\.?\d*)', 'buy'),
             # Buy patterns - ticker first
-            (r'(?:buy|bought|long|entered|entry|买入|做多|加了一笔|bet)\s+([A-Z]{1,5})\s+(?:@|at|@|在)?\s*\$?([\d,]+\.?\d*)\s*(?:x|×|乘)?\s*(\d+)', 'buy'),
+            (r'(?:buy|bought|long|entered|entry|买入|做多|加了一笔)\s+([A-Z]{1,5})\s+(?:@|at|@|在)?\s*\$?([\d,]+\.?\d*)\s*(?:x|×|乘)?\s*(\d+)', 'buy'),
             # Buy patterns - simplified (just ticker and price, assume quantity 1)
-            (r'(?:buy|bought|long|entered|entry|买入|做多|加了一笔|bet)\s+([A-Z]{1,5})\s+(?:@|at|@|在)?\s*\$?([\d,]+\.?\d*)', 'buy'),
+            (r'(?:buy|bought|long|entered|entry|买入|做多|加了一笔)\s+([A-Z]{1,5})\s+(?:@|at|@|在)?\s*\$?([\d,]+\.?\d*)', 'buy'),
+            # "bet" pattern - "bet" means small position, followed by option info
+            # Format: "bet TICKER STRIKE P/C PRICE" or "bet TICKER STRIKEP/C PRICE"
+            (r'bet\s+([A-Z]{1,5})\s+(\d+)([pc])\s+([\d,]+\.?\d*)', 'buy'),
+            (r'bet\s+([A-Z]{1,5})\s+(\d+)([PC])\s+([\d,]+\.?\d*)', 'buy'),
+            # "bet" with quantity: "bet 100 TSLA 250c 2.5"
+            (r'bet\s+(\d+)\s+([A-Z]{1,5})\s+(\d+)([pc])\s+([\d,]+\.?\d*)', 'buy'),
+            # "bet PUT/CALL TICKER" format: "bet PUT BAC" or "bet CALL TSLA"
+            (r'bet\s+(?:PUT|CALL|put|call)\s+([A-Z]{1,5})', 'buy'),
+            # "bet PUT/CALL TICKER STRIKE" format: "bet PUT BAC 50" or "bet CALL TSLA 250"
+            (r'bet\s+(?:PUT|CALL|put|call)\s+([A-Z]{1,5})\s+(\d+)', 'buy'),
+            # "bet PUT/CALL TICKER STRIKE PRICE" format: "bet PUT BAC 50 2.5"
+            (r'bet\s+(?:PUT|CALL|put|call)\s+([A-Z]{1,5})\s+(\d+)\s+([\d,]+\.?\d*)', 'buy'),
             # Sell patterns - quantity first
             (r'(?:sell|sold|short|exit|closed|cover|卖出|做空|平仓|切掉|切|卖出部份)\s+(?:@|at|@|在)?\s*(\d+)\s*(?:shares?|contracts?|股|手|份)?\s*(?:of\s+)?([A-Z]{1,5})\s*(?:@|at|@|在)?\s*\$?([\d,]+\.?\d*)', 'sell'),
             # Sell patterns - ticker first
@@ -528,10 +548,56 @@ class StockMarketAnalyzer:
             for match in matches:
                 groups = match.groups()
                 try:
-                    if len(groups) == 4 and order_type == 'buy':
-                        # Check if this is Discord trading card format: "IONQ PUT 0.36 200"
-                        # Groups: ticker, price, quantity
-                        if groups[1].replace('.', '').replace(',', '').isdigit() and groups[2].isdigit():
+                    match_text = match.group(0).upper()
+                    
+                    if len(groups) == 3 and order_type == 'buy' and 'BET' in match_text:
+                        # "bet PUT/CALL TICKER STRIKE PRICE": "bet PUT BAC 50 2.5"
+                        # Groups: ticker, strike, price
+                        option_type_str = match_text.split()[1]  # "PUT" or "CALL"
+                        ticker = groups[0].upper()
+                        strike = groups[1]
+                        price = float(groups[2].replace(',', '').replace('$', ''))
+                        quantity = 1  # Default for "bet"
+                        ticker = f"{ticker} {strike}{option_type_str[0]}"  # Format as "BAC 50P"
+                    elif len(groups) == 2 and order_type == 'buy' and 'BET' in match_text:
+                        # "bet PUT/CALL TICKER STRIKE": "bet PUT BAC 50"
+                        # Groups: ticker, strike
+                        option_type_str = match_text.split()[1]  # "PUT" or "CALL"
+                        ticker = groups[0].upper()
+                        strike = groups[1]
+                        price = 0  # No price specified
+                        quantity = 1  # Default for "bet"
+                        ticker = f"{ticker} {strike}{option_type_str[0]}"  # Format as "BAC 50P"
+                    elif len(groups) == 1 and order_type == 'buy' and 'BET' in match_text:
+                        # "bet PUT/CALL TICKER": "bet PUT BAC"
+                        # Groups: ticker
+                        option_type_str = match_text.split()[1]  # "PUT" or "CALL"
+                        ticker = groups[0].upper()
+                        strike = ""  # No strike specified
+                        price = 0  # No price specified
+                        quantity = 1  # Default for "bet"
+                        ticker = f"{ticker} {option_type_str}"  # Format as "BAC PUT"
+                    elif len(groups) == 5 and order_type == 'buy':
+                        # "bet" with quantity: "bet 100 TSLA 250c 2.5"
+                        # Groups: quantity, ticker, strike, option_type, price
+                        quantity = int(groups[0])
+                        ticker = groups[1].upper()
+                        strike = groups[2]
+                        option_type = groups[3].upper()  # 'P' or 'C'
+                        price = float(groups[4].replace(',', '').replace('$', ''))
+                        ticker = f"{ticker} {strike}{option_type}"  # Format as "TSLA 250C"
+                    elif len(groups) == 4 and order_type == 'buy':
+                        # Check if this is "bet" pattern: "bet TSLA 250c 2.5"
+                        match_text = match.group(0).upper()
+                        if 'BET' in match_text and len(groups) == 4:
+                            # "bet" pattern: ticker strike p/c price
+                            ticker = groups[0].upper()
+                            strike = groups[1]
+                            option_type = groups[2].upper()  # 'P' or 'C'
+                            price = float(groups[3].replace(',', '').replace('$', ''))
+                            quantity = 1  # Default for "bet" (small position)
+                            ticker = f"{ticker} {strike}{option_type}"  # Format as "TSLA 250C"
+                        elif groups[1].replace('.', '').replace(',', '').isdigit() and groups[2].isdigit():
                             # Format: ticker price quantity (Discord card)
                             ticker = groups[0].upper()
                             price = float(groups[1].replace(',', '').replace('$', ''))
@@ -621,7 +687,8 @@ class StockMarketAnalyzer:
                         continue
                     
                     # Validate extracted data
-                    if ticker and price > 0:
+                    # For "bet PUT/CALL TICKER" format, price might be 0, so allow it
+                    if ticker and (price > 0 or ('BET' in match_text and len(groups) <= 3)):
                         if order_type == 'position':
                             orders.append({
                                 'type': 'position',
@@ -813,10 +880,11 @@ class StockMarketAnalyzer:
             elif has_attachments and not fetcher:
                 print(f"[WARNING] Image attachment found but fetcher is not available")
             
-            # Include message if it's stock-related OR has attachments (images) OR has embeds (trading cards)
-            # IMPORTANT: All messages with images are included regardless of content (no filtering)
-            # Also include if OCR extracted text from images
-            if has_attachments or self.is_stock_related(content) or (has_embeds and embed_texts) or image_texts:
+            # IMPORTANT: Include ALL messages from configured users
+            # We don't filter out discussions - all messages are included for context
+            # This ensures we capture market discussions, strategies, and analysis, not just trading records
+            # Only exception: if message is completely empty and has no attachments/embeds
+            if content.strip() or has_attachments or (has_embeds and embed_texts) or image_texts:
                 timestamp = msg.get("timestamp", "")
                 message_entry = {
                     "content": content,
@@ -967,54 +1035,39 @@ class AISummarizer:
             for msg in stock_messages[:50]
         ])
         
-        # Format orders information
+        # Format orders information - simplified, no specific numbers
         orders = summary_data.get('orders', [])
         orders_text = ""
         if orders:
-            orders_text = "\n\n所有订单记录 (All Orders):\n"
-            for i, order in enumerate(orders, 1):
-                order_time = order.get('timestamp', 'Unknown')
+            # Just mention that orders were detected, but don't list specific numbers
+            order_types = set()
+            tickers_mentioned = set()
+            for order in orders:
                 order_type = order.get('type', 'unknown').upper()
                 ticker = order.get('ticker', 'N/A')
-                quantity = order.get('quantity', 0)
-                price = order.get('price', 0)
-                
-                if order_type == 'POSITION':
-                    orders_text += f"{i}. [{order_time}] POSITION UPDATE: {ticker} @ ${price:.2f} (当前价格/成本)\n"
-                elif quantity > 0:
-                    orders_text += f"{i}. [{order_time}] {order_type}: {quantity} shares/contracts of {ticker} @ ${price:.2f}\n"
-                else:
-                    orders_text += f"{i}. [{order_time}] {order_type}: {ticker} @ ${price:.2f}\n"
+                if order_type != 'POSITION':
+                    order_types.add(order_type)
+                if ticker and ticker != 'N/A':
+                    tickers_mentioned.add(ticker)
+            
+            orders_text = "\n\n交易活动概览 (Trading Activity Overview):\n"
+            if order_types:
+                orders_text += f"检测到以下类型的交易操作: {', '.join(sorted(order_types))}\n"
+            if tickers_mentioned:
+                orders_text += f"涉及的股票/期权: {', '.join(sorted(tickers_mentioned))}\n"
+            orders_text += "注意：具体订单数量、价格等数字已省略，请关注市场讨论和分析。\n"
         else:
-            orders_text = "\n\n所有订单记录: 未找到订单信息\n"
+            orders_text = "\n\n交易活动: 未检测到明确的订单信息\n"
         
-        # Format P/L information
+        # Format P/L information - completely simplified, no numbers or counts
         pnl_list = summary_data.get('pnl', [])
         pnl_text = ""
         if pnl_list:
-            pnl_text = "\n\n盈亏记录 (Profit/Loss):\n"
-            total_pnl = 0
-            for i, pnl in enumerate(pnl_list, 1):
-                pnl_time = pnl.get('timestamp', 'Unknown')
-                value = pnl.get('value', 0)
-                pnl_type = pnl.get('type', 'unknown')
-                is_percentage = pnl.get('is_percentage', False)
-                note = pnl.get('note', '')
-                
-                if is_percentage:
-                    sign = "+" if value >= 0 else ""
-                    pnl_text += f"{i}. [{pnl_time}] {pnl_type.upper()}: {sign}{value:.1f}% {note}\n"
-                elif note:
-                    pnl_text += f"{i}. [{pnl_time}] {pnl_type.upper()}: {note}\n"
-                else:
-                    total_pnl += value
-                    sign = "+" if value >= 0 else ""
-                    pnl_text += f"{i}. [{pnl_time}] {pnl_type.upper()}: {sign}${value:.2f}\n"
-            
-            if total_pnl != 0:
-                pnl_text += f"\n总盈亏 (Total P/L): {('+' if total_pnl >= 0 else '')}${total_pnl:.2f}\n"
+            pnl_text = "\n\n盈亏情况概览 (Profit/Loss Overview):\n"
+            pnl_text += "检测到用户发布了盈亏相关信息。\n"
+            pnl_text += "注意：具体盈亏金额、百分比和记录数量已省略，请关注市场讨论和分析。\n"
         else:
-            pnl_text = "\n\n盈亏记录: 未找到盈亏信息\n"
+            pnl_text = "\n\n盈亏情况: 未找到明确的盈亏信息\n"
         
         # Check for messages with images (might contain P/L info we can't extract)
         messages_with_images = [msg for msg in stock_messages if msg.get('has_images', False)]
@@ -1059,7 +1112,18 @@ class AISummarizer:
 {orders_text}
 {pnl_text}
 
-重要提示：请务必在总结中分析上述订单记录和盈亏信息。如果没有订单记录，请明确说明"未检测到订单信息"。
+重要提示：
+1. 在总结中，请重点关注市场讨论、策略分析和交易观点，而不是具体的交易记录数字。
+2. 不要详细列出订单汇总的具体数字（如数量、价格等）。
+3. 不要详细列出盈亏分析的具体数字。
+4. 可以提及用户进行了哪些交易操作（如"买入看涨期权"、"卖出看跌期权"），但不要包含具体数字。
+5. 可以提及盈亏情况（如"获得盈利"、"出现亏损"），但不要包含具体金额或百分比数字。
+6. 重点分析用户的交易思路、市场观点、策略讨论等内容。
+
+特别注意：
+- "bet" 在这些消息中是指"小仓位赌博"的意思，不是交易类型，也不是股票代码。当用户说"bet PUT BAC"或"bet qqq 609p"时，意思是"用小仓位赌博买入看跌期权"或"用小仓位赌博买入QQQ 609P期权"，表示这是一个小仓位、高风险、投机性的交易，而不是常规的交易操作。
+- 不要把"bet"误解为交易类型、操作类型或股票代码。它只是表示交易规模小、风险高的赌博性质。
+- 在分析中，如果看到"bet"这个词，应该理解为"小仓位赌博性交易"，而不是一个独立的交易标的或资产类别。
 
 请提供一份结构化的每日总结，包括：
 1. **执行摘要**：用户交易活动和关键洞察的简要概述
@@ -1106,14 +1170,25 @@ Messages (only stock-related messages included, from multiple channels):
 {orders_text}
 {pnl_text}
 
-IMPORTANT: Please make sure to analyze the order records and P/L information above in your summary. If no orders were found, please explicitly state "No orders detected".
+IMPORTANT INSTRUCTIONS:
+1. Focus on market discussions, strategy analysis, and trading insights rather than specific trading record numbers.
+2. Do NOT list detailed order summaries with specific numbers (quantities, prices, etc.).
+3. Do NOT list detailed P/L analysis with specific numbers.
+4. You can mention what trading operations the user performed (e.g., "bought call options", "sold put options"), but do NOT include specific numbers.
+5. You can mention profit/loss situations (e.g., "gained profit", "incurred loss"), but do NOT include specific amounts or percentages.
+6. Focus on analyzing the user's trading ideas, market views, strategy discussions, etc.
+
+SPECIAL NOTE:
+- "bet" in these messages means "small position gambling" or "speculative small bet", NOT a trading type, and NOT a stock ticker. When the user says "bet PUT BAC" or "bet qqq 609p", it means "gambling with a small position on a put option" or "small speculative bet on QQQ 609P option", indicating this is a small, high-risk, speculative trade, not a regular trading operation.
+- Do NOT misinterpret "bet" as a trading type, operation type, or stock ticker. It only indicates the trade is small in size and high-risk/gambling in nature.
+- In your analysis, if you see the word "bet", understand it as "small speculative gambling trade", NOT as an independent trading instrument or asset class.
 
 Please provide a structured daily summary that includes:
 1. **Executive Summary**: Brief overview of the user's trading activity and key insights
-2. **Trading Record Analysis**:
-   - Summary of all orders (buy/sell, including quantities, prices, and timestamps)
-   - Profit/Loss analysis (if P/L information was posted, including total P/L)
-   - Position changes (note that original positions may have been established before the 24-hour window, infer from historical messages)
+2. **Trading Activity Overview**:
+   - Brief overview of user's trading activities (e.g., what types of trades were made, but do NOT list specific numbers)
+   - You can mention profit/loss situations (e.g., "gained profit", "incurred loss"), but do NOT include specific amounts or percentages
+   - Position changes and strategy adjustments (note that original positions may have been established before the 24-hour window, infer from historical messages)
 3. **Key Themes**: Main topics and strategies discussed
 4. **Stock Analysis**: Detailed analysis of mentioned stocks/tickers with:
    - Bullish/bearish sentiment
