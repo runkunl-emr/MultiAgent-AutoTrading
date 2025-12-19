@@ -11,6 +11,32 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import argparse
 import time
+import tempfile
+from io import BytesIO
+
+# OCR for image text extraction
+try:
+    import easyocr
+    from PIL import Image
+    import numpy as np
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+    print("Warning: easyocr or Pillow not installed. OCR disabled. Install with: pip install easyocr Pillow")
+
+# PDF generation
+try:
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+    print("Warning: reportlab not installed. PDF generation disabled. Install with: pip install reportlab")
 
 class DiscordMessageFetcher:
     """Fetch messages from Discord channels"""
@@ -22,6 +48,73 @@ class DiscordMessageFetcher:
             "Authorization": token,
             "Content-Type": "application/json"
         }
+        # Initialize OCR reader if available
+        self.ocr_reader = None
+        if OCR_AVAILABLE:
+            try:
+                print("Initializing OCR reader (this may take a moment on first run)...")
+                self.ocr_reader = easyocr.Reader(['en', 'ch_sim'], gpu=False)  # Support English and Chinese
+                print("OCR reader initialized successfully")
+            except Exception as e:
+                print(f"Warning: Failed to initialize OCR reader: {e}")
+                self.ocr_reader = None
+    
+    def extract_text_from_image(self, image_url: str) -> str:
+        """
+        Extract text from an image using OCR
+        
+        Args:
+            image_url: URL of the image to process
+        
+        Returns:
+            Extracted text from the image
+        """
+        if not OCR_AVAILABLE or not self.ocr_reader:
+            print(f"[OCR] OCR not available or reader not initialized")
+            return ""
+        
+        try:
+            # Download image
+            print(f"[OCR] Downloading image from: {image_url[:100]}...")
+            response = requests.get(image_url, headers={"Authorization": self.token}, timeout=30)
+            response.raise_for_status()
+            
+            # Load image and convert to numpy array (easyocr requires numpy array, not PIL Image)
+            image = Image.open(BytesIO(response.content))
+            print(f"[OCR] Image loaded, size: {image.size}")
+            
+            # Convert PIL Image to numpy array
+            image_array = np.array(image)
+            print(f"[OCR] Image converted to numpy array, shape: {image_array.shape}")
+            
+            # Extract text using OCR (pass numpy array or image bytes)
+            print(f"[OCR] Running OCR...")
+            # easyocr can accept numpy array directly
+            results = self.ocr_reader.readtext(image_array)
+            print(f"[OCR] OCR found {len(results)} text regions")
+            
+            # Combine all detected text with better formatting
+            extracted_lines = []
+            for result in results:
+                text = result[1]
+                confidence = result[2] if len(result) > 2 else 0
+                if confidence > 0.3:  # Filter low confidence results
+                    extracted_lines.append(text)
+                    print(f"[OCR] Text: '{text}' (confidence: {confidence:.2f})")
+            
+            extracted_text = " ".join(extracted_lines)
+            
+            if extracted_text:
+                print(f"[OCR] Full extracted text: {extracted_text}")
+            else:
+                print(f"[OCR] No text extracted (all results below confidence threshold)")
+            
+            return extracted_text
+        except Exception as e:
+            print(f"[OCR] Error extracting text from image {image_url}: {e}")
+            import traceback
+            traceback.print_exc()
+            return ""
     
     def fetch_messages(self, channel_id: str, limit: int = 100, before: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -130,49 +223,184 @@ class DiscordMessageFetcher:
             print(f"Error fetching channel info: {e}")
             return None
     
-    def send_message(self, channel_id: str, content: str) -> bool:
+    def generate_pdf(self, content: str, filename: str = None) -> Optional[BytesIO]:
+        """
+        Generate a PDF file from text content
+        
+        Args:
+            content: Text content to convert to PDF
+            filename: Optional filename (not used, returns BytesIO)
+        
+        Returns:
+            BytesIO object containing PDF data, or None if PDF generation fails
+        """
+        if not PDF_AVAILABLE:
+            print("Error: reportlab not installed. Cannot generate PDF.")
+            return None
+        
+        try:
+            # Create PDF in memory
+            buffer = BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=A4,
+                                  rightMargin=72, leftMargin=72,
+                                  topMargin=72, bottomMargin=18)
+            
+            # Container for the 'Flowable' objects
+            elements = []
+            
+            # Define styles
+            styles = getSampleStyleSheet()
+            title_style = ParagraphStyle(
+                'CustomTitle',
+                parent=styles['Heading1'],
+                fontSize=16,
+                textColor='#000000',
+                spaceAfter=12,
+                alignment=TA_CENTER
+            )
+            heading_style = ParagraphStyle(
+                'CustomHeading',
+                parent=styles['Heading2'],
+                fontSize=14,
+                textColor='#000000',
+                spaceAfter=10,
+                spaceBefore=12
+            )
+            normal_style = ParagraphStyle(
+                'CustomNormal',
+                parent=styles['Normal'],
+                fontSize=10,
+                textColor='#000000',
+                spaceAfter=6,
+                leading=14
+            )
+            
+            # Split content into lines and process
+            lines = content.split('\n')
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    elements.append(Spacer(1, 6))
+                    continue
+                
+                # Check if it's a heading (starts with # or **)
+                if line.startswith('###') or line.startswith('##') or line.startswith('#'):
+                    # Remove markdown formatting
+                    clean_line = line.lstrip('#').strip()
+                    if clean_line.startswith('**') and clean_line.endswith('**'):
+                        clean_line = clean_line[2:-2]
+                    elements.append(Paragraph(clean_line, heading_style))
+                    elements.append(Spacer(1, 6))
+                elif line.startswith('**') and line.endswith('**'):
+                    # Bold text
+                    clean_line = line[2:-2]
+                    bold_style = ParagraphStyle(
+                        'Bold',
+                        parent=normal_style,
+                        fontName='Helvetica-Bold'
+                    )
+                    elements.append(Paragraph(clean_line, bold_style))
+                elif line.startswith('*') and line.endswith('*'):
+                    # Italic or bullet point
+                    clean_line = line.strip('*').strip()
+                    elements.append(Paragraph(f"• {clean_line}", normal_style))
+                elif line.startswith('=') and len(line) > 10:
+                    # Separator line
+                    elements.append(Spacer(1, 12))
+                else:
+                    # Normal text
+                    # Escape special characters for ReportLab
+                    clean_line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    elements.append(Paragraph(clean_line, normal_style))
+            
+            # Build PDF
+            doc.build(elements)
+            buffer.seek(0)
+            return buffer
+            
+        except Exception as e:
+            print(f"Error generating PDF: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def send_message(self, channel_id: str, content: str, as_pdf: bool = False) -> bool:
         """
         Send a message to a Discord channel
         
         Args:
             channel_id: Discord channel ID
             content: Message content
+            as_pdf: If True, send as PDF file instead of text message
         
         Returns:
             True if successful, False otherwise
         """
         url = f"{self.base_url}/channels/{channel_id}/messages"
         
-        # Discord has a 2000 character limit per message
-        # Split into multiple messages if needed
-        max_length = 1900  # Leave some buffer
-        
-        if len(content) <= max_length:
-            payload = {"content": content}
+        if as_pdf:
+            # Generate PDF and send as file
+            pdf_buffer = self.generate_pdf(content)
+            if not pdf_buffer:
+                print("Failed to generate PDF, falling back to text message")
+                return self.send_message(channel_id, content, as_pdf=False)
+            
+            # Create filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"summary_{timestamp}.pdf"
+            
+            # Prepare multipart/form-data request
+            files = {
+                'file': (filename, pdf_buffer, 'application/pdf')
+            }
+            data = {
+                'content': f'📄 **AI Summary Report**\nGenerated at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+            }
+            
             try:
-                response = requests.post(url, headers=self.headers, json=payload)
+                # Remove Content-Type header for multipart/form-data
+                headers = {k: v for k, v in self.headers.items() if k.lower() != 'content-type'}
+                response = requests.post(url, headers=headers, data=data, files=files)
                 response.raise_for_status()
+                print(f"✓ PDF sent successfully: {filename}")
                 return True
             except requests.exceptions.RequestException as e:
-                print(f"Error sending message to Discord: {e}")
+                print(f"Error sending PDF to Discord: {e}")
                 if hasattr(e, 'response') and e.response is not None:
                     print(f"Response: {e.response.text[:200]}")
                 return False
         else:
-            # Split into chunks
-            chunks = [content[i:i+max_length] for i in range(0, len(content), max_length)]
-            success = True
-            for i, chunk in enumerate(chunks):
-                chunk_header = f"**消息 {i+1}/{len(chunks)}**\n\n" if len(chunks) > 1 else ""
-                payload = {"content": chunk_header + chunk}
+            # Original text message sending logic
+            # Discord has a 2000 character limit per message
+            # Split into multiple messages if needed
+            max_length = 1900  # Leave some buffer
+            
+            if len(content) <= max_length:
+                payload = {"content": content}
                 try:
                     response = requests.post(url, headers=self.headers, json=payload)
                     response.raise_for_status()
-                    time.sleep(0.5)  # Rate limit protection
+                    return True
                 except requests.exceptions.RequestException as e:
-                    print(f"Error sending message chunk {i+1}: {e}")
-                    success = False
-            return success
+                    print(f"Error sending message to Discord: {e}")
+                    if hasattr(e, 'response') and e.response is not None:
+                        print(f"Response: {e.response.text[:200]}")
+                    return False
+            else:
+                # Split into chunks
+                chunks = [content[i:i+max_length] for i in range(0, len(content), max_length)]
+                success = True
+                for i, chunk in enumerate(chunks):
+                    chunk_header = f"**消息 {i+1}/{len(chunks)}**\n\n" if len(chunks) > 1 else ""
+                    payload = {"content": chunk_header + chunk}
+                    try:
+                        response = requests.post(url, headers=self.headers, json=payload)
+                        response.raise_for_status()
+                        time.sleep(0.5)  # Rate limit protection
+                    except requests.exceptions.RequestException as e:
+                        print(f"Error sending message chunk {i+1}: {e}")
+                        success = False
+                return success
 
 
 class StockMarketAnalyzer:
@@ -196,9 +424,35 @@ class StockMarketAnalyzer:
         ]
     
     def is_stock_related(self, content: str) -> bool:
-        """Check if message content is related to stock market"""
+        """
+        Check if message content is related to stock market
+        Includes messages with stock keywords OR stock tickers
+        """
         content_lower = content.lower()
-        return any(keyword in content_lower for keyword in self.stock_keywords)
+        
+        # Check for stock keywords
+        if any(keyword in content_lower for keyword in self.stock_keywords):
+            return True
+        
+        # Check for stock tickers (e.g., $AAPL, TSLA, QQQ, MSTR)
+        # This ensures messages with tickers are included even without keywords
+        tickers = self.extract_tickers(content)
+        if tickers:
+            return True
+        
+        # Check for common trading patterns (numbers with p/c for options, percentages, etc.)
+        import re
+        # Options patterns: "166p", "609p", "166c", etc.
+        if re.search(r'\b\d+[pc]\b', content, re.IGNORECASE):
+            return True
+        # Percentage patterns: "+90%", "gain 60%", etc.
+        if re.search(r'[\+\-]?\d+%', content):
+            return True
+        # Price patterns: "2.89", "1.96", "成本0.96", etc.
+        if re.search(r'(?:成本|price|@|at)\s*[\d,]+\.?\d*', content, re.IGNORECASE):
+            return True
+        
+        return False
     
     def extract_tickers(self, content: str) -> List[str]:
         """Extract potential stock tickers from message (simple pattern matching)"""
@@ -214,7 +468,273 @@ class StockMarketAnalyzer:
             tickers.update(matches)
         return list(tickers)
     
-    def summarize_messages(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def extract_orders(self, content: str) -> List[Dict[str, Any]]:
+        """
+        Extract trading orders from message content
+        Looks for buy/sell orders with quantities, prices, tickers
+        """
+        import re
+        orders = []
+        content_lower = content.lower()
+        
+        # Patterns for order extraction - More flexible patterns to match various formats
+        # Buy/Sell patterns: "buy 100 TSLA at $250", "sold 50 shares", "long AAPL", "买入100股", etc.
+        # Also supports options: "mstr weekly 166p 2.89", "qqq 609p 1.96", etc.
+        order_patterns = [
+            # Options patterns: "mstr weekly 166p 2.89", "qqq 609p 1.96"
+            (r'([A-Z]{1,5})\s+(?:weekly|monthly|daily)?\s*(\d+)([pc])\s+([\d,]+\.?\d*)', 'buy'),  # Options format
+            (r'([A-Z]{1,5})\s*(\d+)([pc])\s+([\d,]+\.?\d*)', 'buy'),  # Simplified options
+            # Buy patterns - quantity first
+            (r'(?:buy|bought|long|entered|entry|买入|做多|加了一笔|bet)\s+(?:@|at|@|在)?\s*(\d+)\s*(?:shares?|contracts?|股|手|份)?\s*(?:of\s+)?([A-Z]{1,5})\s*(?:@|at|@|在)?\s*\$?([\d,]+\.?\d*)', 'buy'),
+            # Buy patterns - ticker first
+            (r'(?:buy|bought|long|entered|entry|买入|做多|加了一笔|bet)\s+([A-Z]{1,5})\s+(?:@|at|@|在)?\s*\$?([\d,]+\.?\d*)\s*(?:x|×|乘)?\s*(\d+)', 'buy'),
+            # Buy patterns - simplified (just ticker and price, assume quantity 1)
+            (r'(?:buy|bought|long|entered|entry|买入|做多|加了一笔|bet)\s+([A-Z]{1,5})\s+(?:@|at|@|在)?\s*\$?([\d,]+\.?\d*)', 'buy'),
+            # Sell patterns - quantity first
+            (r'(?:sell|sold|short|exit|closed|cover|卖出|做空|平仓|切掉|切|卖出部份)\s+(?:@|at|@|在)?\s*(\d+)\s*(?:shares?|contracts?|股|手|份)?\s*(?:of\s+)?([A-Z]{1,5})\s*(?:@|at|@|在)?\s*\$?([\d,]+\.?\d*)', 'sell'),
+            # Sell patterns - ticker first
+            (r'(?:sell|sold|short|exit|closed|cover|卖出|做空|平仓|切掉|切|卖出部份)\s+([A-Z]{1,5})\s+(?:@|at|@|在)?\s*\$?([\d,]+\.?\d*)\s*(?:x|×|乘)?\s*(\d+)', 'sell'),
+            # Sell patterns - simplified (just ticker and price, assume quantity 1)
+            (r'(?:sell|sold|short|exit|closed|cover|卖出|做空|平仓|切掉|切|卖出部份)\s+([A-Z]{1,5})\s+(?:@|at|@|在)?\s*\$?([\d,]+\.?\d*)', 'sell'),
+            # Position updates: "现1.78", "现成本0.96", "成本负了"
+            (r'([A-Z]{1,5}).*?(?:现|current|成本|cost)\s*([\+\-]?[\d,]+\.?\d*)', 'position'),
+            # Discord trading card format: "IONQ PUT" with "0.36" and "200"
+            # Pattern: TICKER PUT/CALL followed by price and quantity (flexible spacing)
+            # Match: "IONQ PUT 0.36 200" or "IONQ PUT\n0.36\n200" or "IONQ PUT 0.36 200张"
+            (r'([A-Z]{1,5})\s+(?:PUT|CALL|put|call)\s+(?:[\d\s]+)?\s*([\d,]+\.?\d*)\s*(?:[\d\s]+)?\s*(\d+)', 'buy'),
+            # More flexible: "IONQ PUT" anywhere, then price, then quantity (with optional text between)
+            (r'([A-Z]{1,5})\s+(?:PUT|CALL|put|call).*?([\d,]+\.?\d*).*?(\d+)\s*(?:张|contracts?|shares?)?', 'buy'),
+            # Even more flexible: ticker, PUT/CALL, then any numbers (price and quantity)
+            (r'([A-Z]{1,5})\s+(?:PUT|CALL|put|call).*?([\d,]+\.?\d+).*?(\d+)', 'buy'),
+            # Chinese trading card: "买入" + ticker + price + quantity
+            (r'(?:买入|卖出)\s*([A-Z]{1,5})\s*(?:PUT|CALL|put|call)?.*?([\d,]+\.?\d*).*?(\d+)\s*(?:张|contracts?|shares?)?', 'buy'),
+            # Format: "全部成交" + ticker + price + quantity
+            (r'(?:全部成交|部分成交|成交)\s*([A-Z]{1,5})\s*(?:PUT|CALL|put|call)?.*?([\d,]+\.?\d*).*?(\d+)', 'buy'),
+            # Standalone format: Just "IONQ PUT" followed by price and quantity in any order
+            (r'([A-Z]{1,5})\s+(?:PUT|CALL|put|call).*?(\d+\.\d+).*?(\d+)', 'buy'),
+            (r'([A-Z]{1,5})\s+(?:PUT|CALL|put|call).*?(\d+).*?(\d+\.\d+)', 'buy'),
+            # OCR-extracted format: May have spaces or special characters
+            # "IONQ PUT 0.36 200" or "IONQPUT 0.36 200" or "IONQ PUT 0 36 200"
+            (r'([A-Z]{1,5})\s*(?:PUT|CALL|put|call).*?([\d,]+\.?\d*).*?(\d+)\s*(?:张|contracts?|shares?)?', 'buy'),
+            # More flexible: Any ticker followed by PUT/CALL and numbers
+            (r'\b([A-Z]{1,5})\s*(?:PUT|CALL|put|call)\b.*?([\d,]+\.?\d+).*?(\d+)', 'buy'),
+            (r'\b([A-Z]{1,5})\s*(?:PUT|CALL|put|call)\b.*?(\d+).*?([\d,]+\.?\d+)', 'buy'),
+        ]
+        
+        for pattern, order_type in order_patterns:
+            # Try both original content and a cleaned version (remove extra spaces, normalize)
+            content_cleaned = re.sub(r'\s+', ' ', content)  # Normalize whitespace
+            matches = re.finditer(pattern, content_cleaned, re.IGNORECASE)  # Use cleaned content for better matching
+            for match in matches:
+                groups = match.groups()
+                try:
+                    if len(groups) == 4 and order_type == 'buy':
+                        # Check if this is Discord trading card format: "IONQ PUT 0.36 200"
+                        # Groups: ticker, price, quantity
+                        if groups[1].replace('.', '').replace(',', '').isdigit() and groups[2].isdigit():
+                            # Format: ticker price quantity (Discord card)
+                            ticker = groups[0].upper()
+                            price = float(groups[1].replace(',', '').replace('$', ''))
+                            quantity = int(groups[2])
+                            # Check if ticker contains PUT/CALL info in the original match
+                            match_text = match.group(0).upper()
+                            if 'PUT' in match_text:
+                                ticker = f"{ticker} PUT"
+                            elif 'CALL' in match_text:
+                                ticker = f"{ticker} CALL"
+                        else:
+                            # Options format: ticker strike p/c price (e.g., "mstr weekly 166p 2.89")
+                            ticker = groups[0].upper()
+                            strike = groups[1]
+                            option_type = groups[2].upper()  # 'P' or 'C'
+                            price = float(groups[3].replace(',', '').replace('$', ''))
+                            quantity = 1  # Default for options
+                            ticker = f"{ticker} {strike}{option_type}"  # Format as "MSTR 166P"
+                    elif len(groups) == 3:
+                        # Three groups: could be various formats
+                        # Check if this is Discord card format: ticker PUT/CALL price quantity
+                        match_text = match.group(0).upper()
+                        if 'PUT' in match_text or 'CALL' in match_text:
+                            # Discord card format: "IONQ PUT 0.36 200"
+                            # Groups: ticker, price, quantity OR ticker, quantity, price
+                            ticker = groups[0].upper()
+                            
+                            # Determine which is price and which is quantity
+                            # Price usually has decimal point, quantity is usually integer
+                            if '.' in str(groups[1]) or '.' in str(groups[2]):
+                                # One has decimal (price), one is integer (quantity)
+                                if '.' in str(groups[1]):
+                                    price = float(str(groups[1]).replace(',', '').replace('$', ''))
+                                    quantity = int(str(groups[2]).replace(',', ''))
+                                else:
+                                    price = float(str(groups[2]).replace(',', '').replace('$', ''))
+                                    quantity = int(str(groups[1]).replace(',', ''))
+                            else:
+                                # Both might be integers, assume first numeric is price if small, second is quantity
+                                val1 = float(str(groups[1]).replace(',', '').replace('$', ''))
+                                val2 = float(str(groups[2]).replace(',', '').replace('$', ''))
+                                # If one is much larger, it's likely quantity
+                                if val2 > val1 * 10:
+                                    price = val1
+                                    quantity = int(val2)
+                                elif val1 > val2 * 10:
+                                    price = val2
+                                    quantity = int(val1)
+                                else:
+                                    # Both similar, assume first is price, second is quantity
+                                    price = val1
+                                    quantity = int(val2)
+                            
+                            # Add PUT/CALL to ticker
+                            if 'PUT' in match_text:
+                                ticker = f"{ticker} PUT"
+                            elif 'CALL' in match_text:
+                                ticker = f"{ticker} CALL"
+                        elif groups[0].isdigit():
+                            # Format: quantity ticker price
+                            quantity = int(groups[0])
+                            ticker = groups[1].upper()
+                            price = float(groups[2].replace(',', '').replace('$', ''))
+                        elif groups[2].isdigit():
+                            # Format: ticker price quantity
+                            ticker = groups[0].upper()
+                            price = float(groups[1].replace(',', '').replace('$', ''))
+                            quantity = int(groups[2])
+                        else:
+                            # Format: ticker price (no quantity, assume 1)
+                            ticker = groups[0].upper()
+                            price = float(groups[1].replace(',', '').replace('$', ''))
+                            quantity = 1
+                    elif len(groups) == 2:
+                        if order_type == 'position':
+                            # Position update: ticker and current price/cost
+                            ticker = groups[0].upper()
+                            price = float(groups[1].replace(',', '').replace('$', '').replace('+', ''))
+                            quantity = 0  # Position update, no quantity
+                            order_type = 'position'
+                        else:
+                            # Two groups: ticker and price (simplified format, assume quantity 1)
+                            ticker = groups[0].upper()
+                            price = float(groups[1].replace(',', '').replace('$', ''))
+                            quantity = 1
+                    else:
+                        continue
+                    
+                    # Validate extracted data
+                    if ticker and price > 0:
+                        if order_type == 'position':
+                            orders.append({
+                                'type': 'position',
+                                'ticker': ticker,
+                                'price': price,
+                                'quantity': quantity,
+                                'text': match.group(0)
+                            })
+                        else:
+                            if quantity > 0:
+                                order_entry = {
+                                    'type': order_type,
+                                    'ticker': ticker,
+                                    'quantity': quantity,
+                                    'price': price,
+                                    'text': match.group(0)
+                                }
+                                orders.append(order_entry)
+                                # Debug output to help troubleshoot
+                                print(f"[DEBUG] Extracted order: {order_entry['type']} {order_entry['quantity']} {order_entry['ticker']} @ ${order_entry['price']:.2f} (from: {order_entry['text'][:50]}...)")
+                except (ValueError, IndexError, AttributeError):
+                    continue
+        
+        return orders
+    
+    def extract_pnl(self, content: str) -> List[Dict[str, Any]]:
+        """
+        Extract profit/loss information from message content
+        Looks for P/L, gain/loss, profit/loss mentions
+        """
+        import re
+        pnl_list = []
+        content_lower = content.lower()
+        
+        # Patterns for P/L extraction - Support various formats including Chinese
+        pnl_patterns = [
+            # "P/L: +$500", "profit: $1000", "loss: -$200"
+            (r'(?:p/l|pnl|profit|loss|gain|return|盈亏|盈利|亏损)\s*[:\-]?\s*([\+\-]?\$?[\d,]+\.?\d*)', None),
+            # "+$500", "-$200", "+5%", "-3%", "+90%", "gain 60%"
+            (r'([\+\-]\$?[\d,]+\.?\d*(?:\s*%|percent)?)', None),
+            (r'(?:gain|gained|盈利|赚)\s+([\+\-]?\d+\.?\d*(?:\s*%|percent)?)', 'profit'),
+            # "made $500", "lost $200", "成本负了" (negative cost = profit)
+            (r'(?:made|earned|gained|profit|won|赚|盈利)\s+([\+\-]?\$?[\d,]+\.?\d*)', 'profit'),
+            (r'(?:lost|losing|loss|亏|亏损)\s+([\+\-]?\$?[\d,]+\.?\d*)', 'loss'),
+            # Chinese patterns: "成本负了" (cost is negative = profit)
+            (r'成本\s*(?:负|negative|is\s*negative)', 'profit'),
+            # Percentage gains: "+90%", "gain 60%"
+            (r'[\+\-]?\d+\.?\d*\s*%', None),
+        ]
+        
+        for pattern, pnl_type in pnl_patterns:
+            matches = re.finditer(pattern, content, re.IGNORECASE)
+            for match in matches:
+                try:
+                    # Special handling for "成本负了" (negative cost = profit)
+                    match_text = match.group(0)
+                    if '成本' in match_text and ('负' in match_text or 'negative' in match_text.lower()):
+                        pnl_list.append({
+                            'type': 'profit',
+                            'value': 0,  # Special marker for negative cost
+                            'text': match_text,
+                            'note': 'Negative cost (成本负了)'
+                        })
+                        continue
+                    
+                    # Extract value from match
+                    # Check if pattern has capturing groups
+                    if match.lastindex is not None and match.lastindex >= 1:
+                        value_str = match.group(1)
+                    else:
+                        # No capturing group, use the full match
+                        value_str = match_text
+                    
+                    # Clean value string
+                    is_percentage = '%' in value_str
+                    value_str = value_str.replace('$', '').replace(',', '').replace('%', '').strip()
+                    
+                    if not value_str:
+                        continue
+                    
+                    value = float(value_str)
+                    
+                    # If percentage, convert to a reasonable estimate (assume base of 100 for calculation)
+                    # For example, "+90%" could mean 90% gain on some position
+                    if is_percentage:
+                        # Store as percentage, but also calculate estimated value
+                        # We'll store the percentage and let AI interpret it
+                        pnl_list.append({
+                            'type': 'profit' if value >= 0 else 'loss',
+                            'value': value,  # Store percentage as-is
+                            'text': match_text,
+                            'is_percentage': True
+                        })
+                    else:
+                        # Determine type if not specified
+                        if pnl_type is None:
+                            pnl_type = 'profit' if value >= 0 else 'loss'
+                        elif pnl_type == 'profit' and value < 0:
+                            pnl_type = 'loss'
+                        elif pnl_type == 'loss' and value > 0:
+                            pnl_type = 'profit'
+                        
+                        pnl_list.append({
+                            'type': pnl_type,
+                            'value': value,
+                            'text': match_text
+                        })
+                except (ValueError, IndexError, AttributeError):
+                    continue
+        
+        return pnl_list
+    
+    def summarize_messages(self, messages: List[Dict[str, Any]], fetcher: Optional['DiscordMessageFetcher'] = None) -> Dict[str, Any]:
         """
         Summarize stock market messages
         
@@ -227,32 +747,123 @@ class StockMarketAnalyzer:
         stock_messages = []
         all_tickers = set()
         message_dates = []
+        all_orders = []
+        all_pnl = []
         
         for msg in messages:
             content = msg.get("content", "")
-            if not content:
-                # Try to get content from embeds
-                embeds = msg.get("embeds", [])
-                for embed in embeds:
-                    if "description" in embed:
-                        content += " " + embed["description"]
-                    if "title" in embed:
-                        content += " " + embed["title"]
+            # Extract content from embeds (Discord rich content like trading order cards)
+            embeds = msg.get("embeds", [])
+            embed_texts = []
+            for embed in embeds:
+                # Extract title
+                if "title" in embed:
+                    embed_texts.append(embed["title"])
+                # Extract description
+                if "description" in embed:
+                    embed_texts.append(embed["description"])
+                # Extract fields (common in trading order cards)
+                if "fields" in embed:
+                    for field in embed["fields"]:
+                        if "name" in field:
+                            embed_texts.append(field["name"])
+                        if "value" in field:
+                            embed_texts.append(field["value"])
+                # Extract footer
+                if "footer" in embed and "text" in embed["footer"]:
+                    embed_texts.append(embed["footer"]["text"])
+                # Extract author
+                if "author" in embed and "name" in embed["author"]:
+                    embed_texts.append(embed["author"]["name"])
             
-            if self.is_stock_related(content):
-                stock_messages.append({
+            # Combine embed content with message content
+            if embed_texts:
+                embed_content = " ".join(embed_texts)
+                content = (content + " " + embed_content).strip()
+                # Debug: Print embed content for troubleshooting
+                if embed_texts:
+                    print(f"[DEBUG] Extracted embed content: {embed_content[:200]}...")
+            
+            # Check if message has attachments (images) - these might contain P/L info
+            has_attachments = len(msg.get("attachments", [])) > 0
+            has_embeds = len(msg.get("embeds", [])) > 0
+            
+            # Extract text from image attachments using OCR
+            image_texts = []
+            if has_attachments and fetcher and OCR_AVAILABLE:
+                attachments = msg.get("attachments", [])
+                for attachment in attachments:
+                    # Check if it's an image
+                    content_type = attachment.get("content_type", "")
+                    filename = attachment.get("filename", "")
+                    if content_type.startswith("image/") or filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+                        image_url = attachment.get("url", "")
+                        if image_url:
+                            print(f"[OCR] Processing image attachment: {filename}")
+                            extracted_text = fetcher.extract_text_from_image(image_url)
+                            if extracted_text:
+                                image_texts.append(extracted_text)
+                                # Add OCR text to content for order extraction
+                                content += f" {extracted_text}"
+                                print(f"[OCR] Extracted text added to content: {extracted_text[:200]}...")
+                            else:
+                                print(f"[OCR] No text extracted from image: {filename}")
+            elif has_attachments and not OCR_AVAILABLE:
+                print(f"[WARNING] Image attachment found but OCR is not available. Install: pip install easyocr Pillow")
+            elif has_attachments and not fetcher:
+                print(f"[WARNING] Image attachment found but fetcher is not available")
+            
+            # Include message if it's stock-related OR has attachments (images) OR has embeds (trading cards)
+            # IMPORTANT: All messages with images are included regardless of content (no filtering)
+            # Also include if OCR extracted text from images
+            if has_attachments or self.is_stock_related(content) or (has_embeds and embed_texts) or image_texts:
+                timestamp = msg.get("timestamp", "")
+                message_entry = {
                     "content": content,
-                    "timestamp": msg.get("timestamp", ""),
+                    "timestamp": timestamp,
                     "id": msg.get("id", "")
-                })
+                }
+                
+                # Mark if message has images
+                if has_attachments:
+                    message_entry["has_images"] = True
+                    message_entry["image_count"] = len(msg.get("attachments", []))
+                    if image_texts:
+                        message_entry["ocr_extracted"] = True
+                        message_entry["ocr_text"] = " ".join(image_texts)
+                    else:
+                        # Note if OCR is not available or failed
+                        if not OCR_AVAILABLE:
+                            content += " [包含图片附件，但OCR未启用]"
+                        elif fetcher:
+                            content += " [包含图片附件，OCR提取失败或图片中无文字]"
+                        else:
+                            content += " [包含图片附件，可能包含交易记录或盈亏信息]"
+                
+                stock_messages.append(message_entry)
                 
                 # Extract tickers
                 tickers = self.extract_tickers(content)
                 all_tickers.update(tickers)
                 
+                # Extract orders
+                print(f"[DEBUG] Extracting orders from content: {content[:200]}...")
+                orders = self.extract_orders(content)
+                print(f"[DEBUG] Found {len(orders)} orders")
+                for order in orders:
+                    order['timestamp'] = timestamp
+                    all_orders.append(order)
+                    print(f"[DEBUG] Added order: {order}")
+                
+                # Extract P/L
+                pnl = self.extract_pnl(content)
+                for p in pnl:
+                    p['timestamp'] = timestamp
+                    all_pnl.append(p)
+                
                 # Parse timestamp
                 try:
-                    dt = datetime.fromisoformat(msg.get("timestamp", "").replace('Z', '+00:00'))
+                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                     message_dates.append(dt)
                 except:
                     pass
@@ -262,6 +873,8 @@ class StockMarketAnalyzer:
             "total_messages": len(messages),
             "stock_related_messages": len(stock_messages),
             "tickers_mentioned": sorted(list(all_tickers)),
+            "orders": all_orders,
+            "pnl": all_pnl,
             "date_range": None,
             "messages": stock_messages[:50]  # Keep first 50 for detailed review
         }
@@ -354,6 +967,60 @@ class AISummarizer:
             for msg in stock_messages[:50]
         ])
         
+        # Format orders information
+        orders = summary_data.get('orders', [])
+        orders_text = ""
+        if orders:
+            orders_text = "\n\n所有订单记录 (All Orders):\n"
+            for i, order in enumerate(orders, 1):
+                order_time = order.get('timestamp', 'Unknown')
+                order_type = order.get('type', 'unknown').upper()
+                ticker = order.get('ticker', 'N/A')
+                quantity = order.get('quantity', 0)
+                price = order.get('price', 0)
+                
+                if order_type == 'POSITION':
+                    orders_text += f"{i}. [{order_time}] POSITION UPDATE: {ticker} @ ${price:.2f} (当前价格/成本)\n"
+                elif quantity > 0:
+                    orders_text += f"{i}. [{order_time}] {order_type}: {quantity} shares/contracts of {ticker} @ ${price:.2f}\n"
+                else:
+                    orders_text += f"{i}. [{order_time}] {order_type}: {ticker} @ ${price:.2f}\n"
+        else:
+            orders_text = "\n\n所有订单记录: 未找到订单信息\n"
+        
+        # Format P/L information
+        pnl_list = summary_data.get('pnl', [])
+        pnl_text = ""
+        if pnl_list:
+            pnl_text = "\n\n盈亏记录 (Profit/Loss):\n"
+            total_pnl = 0
+            for i, pnl in enumerate(pnl_list, 1):
+                pnl_time = pnl.get('timestamp', 'Unknown')
+                value = pnl.get('value', 0)
+                pnl_type = pnl.get('type', 'unknown')
+                is_percentage = pnl.get('is_percentage', False)
+                note = pnl.get('note', '')
+                
+                if is_percentage:
+                    sign = "+" if value >= 0 else ""
+                    pnl_text += f"{i}. [{pnl_time}] {pnl_type.upper()}: {sign}{value:.1f}% {note}\n"
+                elif note:
+                    pnl_text += f"{i}. [{pnl_time}] {pnl_type.upper()}: {note}\n"
+                else:
+                    total_pnl += value
+                    sign = "+" if value >= 0 else ""
+                    pnl_text += f"{i}. [{pnl_time}] {pnl_type.upper()}: {sign}${value:.2f}\n"
+            
+            if total_pnl != 0:
+                pnl_text += f"\n总盈亏 (Total P/L): {('+' if total_pnl >= 0 else '')}${total_pnl:.2f}\n"
+        else:
+            pnl_text = "\n\n盈亏记录: 未找到盈亏信息\n"
+        
+        # Check for messages with images (might contain P/L info we can't extract)
+        messages_with_images = [msg for msg in stock_messages if msg.get('has_images', False)]
+        if messages_with_images:
+            pnl_text += f"\n注意: 有 {len(messages_with_images)} 条消息包含图片附件，可能包含额外的交易记录或盈亏信息（图片内容无法自动提取）\n"
+        
         # Format channel name(s) for prompt
         if channel_names and len(channel_names) > 1:
             channel_desc = f"在以下频道中：{', '.join(channel_names)}"
@@ -372,7 +1039,9 @@ class AISummarizer:
                 stock_related_count=summary_data.get('stock_related_messages', 0),
                 tickers=', '.join(summary_data.get('tickers_mentioned', [])) or ('无' if language.lower() in ['chinese', 'zh'] else 'None'),
                 date_range=f"{summary_data.get('date_range', {}).get('earliest', 'Unknown')} 至 {summary_data.get('date_range', {}).get('latest', 'Unknown')}" if language.lower() in ['chinese', 'zh'] else f"{summary_data.get('date_range', {}).get('earliest', 'Unknown')} to {summary_data.get('date_range', {}).get('latest', 'Unknown')}",
-                messages_text=messages_text
+                messages_text=messages_text,
+                orders_text=orders_text,
+                pnl_text=pnl_text
             )
         elif language.lower() == "chinese" or language.lower() == "zh":
             # Default Chinese prompt (can be customized)
@@ -387,19 +1056,28 @@ class AISummarizer:
 消息内容（仅包含股票相关消息，来自多个频道）：
 {messages_text}
 
+{orders_text}
+{pnl_text}
+
+重要提示：请务必在总结中分析上述订单记录和盈亏信息。如果没有订单记录，请明确说明"未检测到订单信息"。
+
 请提供一份结构化的每日总结，包括：
 1. **执行摘要**：用户交易活动和关键洞察的简要概述
-2. **关键主题**：讨论的主要话题和策略
-3. **股票分析**：对提到的股票/代码的详细分析，包括：
+2. **交易记录分析**：
+   - 所有订单汇总（买入/卖出，包括数量、价格和时间）
+   - 盈亏分析（如果有发布盈亏信息，包括总盈亏）
+   - 持仓变化（注意原始持仓可能发生在24小时之前，需要从历史消息中推断）
+3. **关键主题**：讨论的主要话题和策略
+4. **股票分析**：对提到的股票/代码的详细分析，包括：
    - 看涨/看跌情绪
    - 提到的入场/出场点
    - 价格目标和止损位
    - 风险评估
-4. **交易信号**：明确的买入/卖出信号
-5. **市场展望**：整体市场情绪和预测
-6. **行动项目**：关键要点和建议行动
+5. **交易信号**：明确的买入/卖出信号
+6. **市场展望**：整体市场情绪和预测
+7. **行动项目**：关键要点和建议行动
 
-请用清晰、专业的方式格式化总结，适合交易者和投资者阅读。所有内容请使用中文。"""
+请用清晰、专业的方式格式化总结，适合交易者和投资者阅读。特别注意分析用户的完整交易记录和盈亏情况。所有内容请使用中文。"""
             
             prompt = default_prompt.format(
                 username=username,
@@ -408,7 +1086,9 @@ class AISummarizer:
                 stock_related_count=summary_data.get('stock_related_messages', 0),
                 tickers=', '.join(summary_data.get('tickers_mentioned', [])) or '无',
                 date_range=f"{summary_data.get('date_range', {}).get('earliest', 'Unknown')} 至 {summary_data.get('date_range', {}).get('latest', 'Unknown')}",
-                messages_text=messages_text
+                messages_text=messages_text,
+                orders_text=orders_text,
+                pnl_text=pnl_text
             )
         else:
             # Default English prompt (can be customized)
@@ -423,19 +1103,28 @@ Key Information:
 Messages (only stock-related messages included, from multiple channels):
 {messages_text}
 
+{orders_text}
+{pnl_text}
+
+IMPORTANT: Please make sure to analyze the order records and P/L information above in your summary. If no orders were found, please explicitly state "No orders detected".
+
 Please provide a structured daily summary that includes:
 1. **Executive Summary**: Brief overview of the user's trading activity and key insights
-2. **Key Themes**: Main topics and strategies discussed
-3. **Stock Analysis**: Detailed analysis of mentioned stocks/tickers with:
+2. **Trading Record Analysis**:
+   - Summary of all orders (buy/sell, including quantities, prices, and timestamps)
+   - Profit/Loss analysis (if P/L information was posted, including total P/L)
+   - Position changes (note that original positions may have been established before the 24-hour window, infer from historical messages)
+3. **Key Themes**: Main topics and strategies discussed
+4. **Stock Analysis**: Detailed analysis of mentioned stocks/tickers with:
    - Bullish/bearish sentiment
    - Entry/exit points mentioned
    - Price targets and stop losses
    - Risk assessments
-4. **Trading Signals**: Clear buy/sell signals identified
-5. **Market Outlook**: Overall market sentiment and predictions
-6. **Action Items**: Key takeaways and recommended actions
+5. **Trading Signals**: Clear buy/sell signals identified
+6. **Market Outlook**: Overall market sentiment and predictions
+7. **Action Items**: Key takeaways and recommended actions
 
-Format the summary in a clear, professional manner suitable for traders and investors."""
+Format the summary in a clear, professional manner suitable for traders and investors. Pay special attention to analyzing the user's complete trading record and P/L performance."""
             
             prompt = default_prompt.format(
                 username=username,
@@ -474,7 +1163,7 @@ Format the summary in a clear, professional manner suitable for traders and inve
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
-                max_tokens=2000
+                max_tokens=8000  # Increased to allow full summary output
             )
             
             return response.choices[0].message.content
@@ -491,7 +1180,7 @@ Format the summary in a clear, professional manner suitable for traders and inve
             
             message = client.messages.create(
                 model="claude-3-haiku-20240307",  # Using cheaper model
-                max_tokens=2000,
+                max_tokens=8000,  # Increased to allow full summary output
                 messages=[
                     {"role": "user", "content": prompt}
                 ]
@@ -579,7 +1268,7 @@ Format the summary in a clear, professional manner suitable for traders and inve
                                     contents=prompt,
                                     config=genai.types.GenerateContentConfig(
                                         temperature=0.7,
-                                        max_output_tokens=2000,
+                                        max_output_tokens=8000,  # Increased to allow full summary output
                                     )
                                 )
                                 # Extract text from response
@@ -610,7 +1299,7 @@ Format the summary in a clear, professional manner suitable for traders and inve
                                     contents=prompt,
                                     config=genai.types.GenerateContentConfig(
                                         temperature=0.7,
-                                        max_output_tokens=2000,
+                                        max_output_tokens=8000,  # Increased to allow full summary output
                                     )
                                 )
                                 if hasattr(response, 'text'):
@@ -661,7 +1350,7 @@ Format the summary in a clear, professional manner suitable for traders and inve
                                     prompt,
                                     generation_config={
                                         "temperature": 0.7,
-                                        "max_output_tokens": 2000,
+                                        "max_output_tokens": 8000,  # Increased to allow full summary output
                                     }
                                 )
                                 return response.text
@@ -941,7 +1630,7 @@ def main():
             
             # Analyze and summarize all messages together
             print(f"\nAnalyzing {len(all_messages)} total messages for stock market content...")
-            summary = analyzer.summarize_messages(all_messages)
+            summary = analyzer.summarize_messages(all_messages, fetcher=fetcher)
             
             # Format basic summary
             formatted_summary = analyzer.format_summary(summary, username, channel_names=channel_names)
@@ -995,7 +1684,7 @@ def main():
             
             # Analyze and summarize
             print(f"\nAnalyzing {len(messages)} messages for stock market content...")
-            summary = analyzer.summarize_messages(messages)
+            summary = analyzer.summarize_messages(messages, fetcher=fetcher)
             
             # Format basic summary
             formatted_summary = analyzer.format_summary(summary, username, channel_name)
@@ -1050,8 +1739,11 @@ def main():
                     summary_header = f"**📊 {username} 的每日总结**\n**频道:** {channel_name}\n\n"
                 full_summary = summary_header + ai_summary
                 
-                print(f"\nSending summary to Discord channel {destination_channel_id}...")
-                if fetcher.send_message(destination_channel_id, full_summary):
+                # Check if should send as PDF
+                send_as_pdf = config.get("summary", {}).get("send_as_pdf", False)
+                
+                print(f"\nSending summary to Discord channel {destination_channel_id} as {'PDF' if send_as_pdf else 'text'}...")
+                if fetcher.send_message(destination_channel_id, full_summary, as_pdf=send_as_pdf):
                     print(f"✓ Summary sent to Discord successfully for {username}")
                 else:
                     print(f"✗ Failed to send summary to Discord for {username}")
