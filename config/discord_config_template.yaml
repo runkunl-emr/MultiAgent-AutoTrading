@@ -4,11 +4,30 @@ discord:
   
   # Channel IDs to monitor (required)
   channel_ids:
-    - "1372032779050684616"  # Replace with your channel ID
+    - ""  # Replace with your channel ID
   
   # Destination channel ID to forward messages to (optional)
   # Leave empty or remove this line if you don't want to forward messages
-  destination_channel_id: "1445102817491550392"  # Replace with destination channel ID if you want to forward messages
+  destination_channel_id: ""  # Replace with destination channel ID if you want to forward messages
+  
+  # User filters (optional) - Only listen to specific users in specific channels
+  # Format: channel_id: [username1, username2]
+  # Example: Only listen to "username1" in channel "1372032779050684616"
+  # user_filters:
+  #   "1372032779050684616": ["username1"]
+  # Leave empty or remove if you want to listen to all users
+  user_filters: { "xxxxxxx": ["xxxxxx"] }
+
+  message_filters:
+    "1447887470434848820":
+      - ".*[0-9]+[pc].*"  # Options format: "6805p", "84p"
+      - ".*(?:出|卖出|止盈|Short|short|突破|份|张|买入|卖出|止盈).*"  # Trading actions: "出50张", "止盈 29卖出"
+      - ".*[A-Z]{1,5}\\s+\\d+.*"  # Ticker with numbers: "SPXW 6880", "GLD 29"
+      - ".*\\d+%.*"  # Percentages: "128%", "150bps"
+      - ".*\\d+\\.?\\d*\\s*->\\s*\\d+\\.?\\d*.*"  # Price changes: "0.38->0.7"
+      - ".*(?:总共|每|尝试|微观|risk|bps|分析|点位|target|entry|exit|上升|下降).*"  # Trading keywords
+      - ".*\\d+\\s*份.*"  # Quantity format: "10份", "6份"
+      - ".*\\d+\\.?\\d*\\s*出.*"  # Price with action: "1.75出50张"
   
   # Trading signal keywords
   signal_keywords:
