@@ -1,0 +1,50 @@
+# Summary Configuration
+# Configuration for daily AI summaries of Discord messages
+
+discord:
+  # Discord user token (required)
+  # Leave empty to use token from discord_config.yaml, or set your token here
+  token: ""
+  
+  # Destination channel ID to send summaries to
+  destination_channel_id: ""  # Where to send AI summaries
+  
+  # User filters - Users to generate summaries for
+  # Format: username: [channel_id1, channel_id2]
+  # Example: Generate summaries for user "vordinkkk" from multiple channels
+  user_filters:
+    "xxxx": ["1234567890", "987651411"]
+
+# AI Configuration - For generating AI-powered summaries
+ai:
+  # Enable AI summarization
+  enabled: true
+  # AI provider: "openai", "anthropic", or "gemini"
+  provider: "gemini"
+  # API key (or set via environment variable GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY)
+  api_key: ""  # Leave empty to use environment variable
+  
+  # Custom prompt template (optional)
+  # Use placeholders: {username}, {channel_name}, {total_messages}, {stock_related_count}, {tickers}, {date_range}, {messages_text}
+  # Leave empty to use default prompt
+  # custom_prompt: |
+  #   你是一位专业的金融分析师助手。请分析以下来自用户"{username}"的股票市场消息...
+
+# Summary Settings
+summary:
+  # Language for summaries: "chinese" or "english"
+  language: "chinese"
+  # Maximum messages to fetch per user (default: 500, enough for 24 hours)
+  max_messages: 500
+  # Automatically send summaries to Discord
+  auto_send_to_discord: true
+  # Fetch only last 24 hours (set to false to fetch all messages)
+  last_24_hours_only: true
+
+# Output Settings
+output:
+  # Default output directory for summaries
+  directory: "summaries"
+  # Include timestamp in filename
+  include_timestamp: true
+

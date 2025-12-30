@@ -13,6 +13,7 @@ import time
 import threading
 import json
 import datetime
+import re
 from typing import Dict, Any, Set, List, Callable, Optional
 import platform
 import websocket
@@ -37,6 +38,9 @@ class ConfigManager:
             "discord": {
                 "token": "",
                 "channel_ids": [],
+                "destination_channel_id": "",  # Optional destination channel for forwarding
+                "user_filters": {},  # Optional: {channel_id: [username1, username2]} - only listen to specific users in channels
+                "message_filters": {},  # Optional: {channel_id: [pattern1, pattern2]} or {username: [pattern1, pattern2]} - regex patterns for message content filtering (only applies to users in user_filters)
                 "signal_keywords": ["buy", "sell", "long", "short", "signal", "trading", "trade", "entry", "bullish", "bearish"]
             },
             "notification": {
@@ -53,7 +57,8 @@ class ConfigManager:
         
         if config_path and os.path.exists(config_path):
             try:
-                with open(config_path, 'r') as f:
+                # Explicitly use UTF-8 to avoid Windows default 'charmap' decode errors
+                with open(config_path, 'r', encoding='utf-8') as f:
                     file_config = yaml.safe_load(f)
                     if file_config:
                         self._update_config_recursive(self.config, file_config)
@@ -70,7 +75,8 @@ class ConfigManager:
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             
-            with open(path, 'w') as f:
+            # Save as UTF-8 to match read_config encoding and support non-ASCII comments
+            with open(path, 'w', encoding='utf-8') as f:
                 yaml.dump(self.config, f, default_flow_style=False)
                 
             print(f"Configuration saved to {path}")
@@ -190,7 +196,10 @@ class MessageProcessor:
     """Message processor"""
     
     def __init__(self, channel_ids: List[str], signal_keywords: List[str], 
-                 signal_callback: Callable[[Dict[str, Any]], None], token: str, use_rest_api: bool = False):
+                 signal_callback: Callable[[Dict[str, Any]], None], token: str, 
+                 use_rest_api: bool = False, destination_channel_id: Optional[str] = None,
+                 user_filters: Optional[Dict[str, List[str]]] = None,
+                 message_filters: Optional[Dict[str, List[str]]] = None):
         self.channel_ids = channel_ids
         self.signal_keywords = [kw.lower() for kw in signal_keywords]
         self.signal_callback = signal_callback
@@ -198,6 +207,26 @@ class MessageProcessor:
         self.token = token  # Store token for REST API calls
         self.use_rest_api = use_rest_api  # Control whether to use REST API
         self.current_user = None  # Store current username to compare message sender
+        self.destination_channel_id = destination_channel_id  # Channel to forward messages to
+        # User filters: {channel_id: [username1, username2, ...]}
+        # If a channel has user filters, only messages from those users will be processed
+        # If None or empty list, all users are allowed
+        self.user_filters = user_filters or {}
+        # Message filters: {channel_id: [pattern1, pattern2]} or {username: [pattern1, pattern2]}
+        # Only applies to users in user_filters. Messages matching patterns or with images are included.
+        self.message_filters = message_filters or {}
+        # Compile regex patterns for message filters
+        self._compiled_message_filters = {}
+        if self.message_filters:
+            for key, patterns in self.message_filters.items():
+                compiled_patterns = []
+                for pattern in patterns:
+                    try:
+                        compiled_patterns.append(re.compile(pattern, re.IGNORECASE))
+                    except re.error as e:
+                        print(f"{Colors.YELLOW}Warning: Invalid regex pattern '{pattern}' in message_filters: {e}{Colors.RESET}")
+                if compiled_patterns:
+                    self._compiled_message_filters[key] = compiled_patterns
         # Print only monitored channel IDs without extra text
         for channel_id in channel_ids:
             if channel_id not in self.channel_ids:
@@ -228,12 +257,60 @@ class MessageProcessor:
             if not is_monitored:
                 return
             
-            # Start timing for latency measurement
-            start_time = time.time()
-            
-            # Get essential message data
+            # Get essential message data (need author for user filter check)
             content = message_data.get("content", "")
             author = message_data.get("author", {}).get("username", "unknown")
+            
+            # Check user filter for this channel
+            # If channel has user filters, only process messages from allowed users
+            user_in_filter = False
+            if channel_id_str in self.user_filters:
+                allowed_users = [u.lower() for u in self.user_filters[channel_id_str]]
+                author_lower = author.lower()
+                if author_lower not in allowed_users:
+                    # User not in filter list, skip this message
+                    print(f"{Colors.YELLOW}Message from {author} ignored (not in user filter for channel){Colors.RESET}")
+                    return
+                user_in_filter = True
+            
+            # Apply message content filters (only for users in user_filters)
+            if user_in_filter and self._compiled_message_filters:
+                # Get filter patterns for this channel/user
+                channel_filters = self._compiled_message_filters.get(channel_id_str, [])
+                user_filters = self._compiled_message_filters.get(author, [])
+                all_filter_patterns = channel_filters + user_filters
+                
+                if all_filter_patterns:
+                    # Check if message has images/attachments/embeds (always include)
+                    attachments = message_data.get("attachments", [])
+                    embeds = message_data.get("embeds", [])
+                    has_images = False
+                    if attachments:
+                        image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
+                        for att in attachments:
+                            filename = att.get("filename", "").lower()
+                            content_type = att.get("content_type", "").lower()
+                            if any(filename.endswith(ext) for ext in image_extensions) or "image" in content_type:
+                                has_images = True
+                                break
+                    has_embeds = len(embeds) > 0
+                    
+                    # Always include messages with images/attachments/embeds
+                    if not (has_images or has_embeds):
+                        # Check if content matches any filter pattern
+                        matches_filter = False
+                        for pattern in all_filter_patterns:
+                            if pattern.search(content):
+                                matches_filter = True
+                                break
+                        
+                        if not matches_filter:
+                            # Message doesn't match any filter pattern and has no images
+                            print(f"{Colors.YELLOW}[消息已过滤 - 内容不匹配过滤规则]{Colors.RESET}")
+                            return
+            
+            # Start timing for latency measurement
+            start_time = time.time()
             
             # Get channel and guild names if available from gateway
             channel_name = message_data.get("_channel_name", "Unknown Channel")
@@ -297,6 +374,33 @@ class MessageProcessor:
                     combined_content += " " + embed["title"]
                 if "description" in embed:
                     combined_content += " " + embed["description"]
+            
+            # 只转发包含数字或图片的消息（过滤普通对话）
+            # Only forward messages containing numbers or images (filter out normal conversations)
+            combined_content_for_check = combined_content or content or ""
+            has_numbers = re.search(r'\d', combined_content_for_check) is not None
+            
+            # 检查是否有图片附件
+            attachments = message_data.get("attachments", [])
+            has_images = False
+            if attachments:
+                # 检查附件是否为图片格式
+                image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
+                for att in attachments:
+                    filename = att.get("filename", "").lower()
+                    content_type = att.get("content_type", "").lower()
+                    if any(filename.endswith(ext) for ext in image_extensions) or \
+                       "image" in content_type:
+                        has_images = True
+                        break
+            
+            # 如果包含数字或图片，则转发
+            if has_numbers or has_images:
+                if self.destination_channel_id:
+                    self._forward_message(message_data, combined_content or content)
+            else:
+                # 消息不包含数字或图片，跳过转发
+                print(f"{Colors.YELLOW}[消息已过滤 - 未检测到数字或图片（可能是普通对话）]{Colors.RESET}")
             
             # Check if contains trading signal keywords - HIGHLIGHT IMPORTANT SIGNALS
             if combined_content and self._is_trading_signal(combined_content):
@@ -401,6 +505,124 @@ class MessageProcessor:
         except Exception as e:
             print(f"Error recovering content: {str(e)}")
             return None
+    
+    def _forward_message(self, message_data: Dict[str, Any], content: str):
+        """Forward message to destination channel with images and attachments"""
+        try:
+            if not self.destination_channel_id or not self.token:
+                return
+            
+            author = message_data.get("author", {}).get("username", "Unknown")
+            channel_name = message_data.get("_channel_name", "Unknown Channel")
+            
+            # Check for attachments (images, files, etc.)
+            attachments = message_data.get("attachments", [])
+            has_attachments = len(attachments) > 0
+            
+            # Collect attachment URLs for deduplication
+            attachment_urls_set = set()  # Use set to track URLs we've already seen
+            attachment_info = []  # Store (url, filename, content_type) tuples
+            
+            if has_attachments:
+                for att in attachments:
+                    url = att.get("url", "")
+                    filename = att.get("filename", "file")
+                    content_type = att.get("content_type", "image/png")
+                    if url:
+                        # Normalize URL (remove query parameters for comparison)
+                        normalized_url = url.split('?')[0]
+                        attachment_urls_set.add(normalized_url)
+                        attachment_info.append((url, filename, content_type))
+            
+            # Format message to forward
+            forwarded_content = f"**From:** {author} in #{channel_name}\n\n{content}"
+            
+            # Check for embeds with images (but skip if they're already in attachments)
+            embeds = message_data.get("embeds", [])
+            embed_images = []
+            for embed in embeds:
+                # Check embed image
+                if "image" in embed and "url" in embed["image"]:
+                    embed_url = embed["image"]["url"]
+                    normalized_embed_url = embed_url.split('?')[0]
+                    # Only add if not already in attachments
+                    if normalized_embed_url not in attachment_urls_set:
+                        embed_images.append(embed_url)
+                        attachment_urls_set.add(normalized_embed_url)  # Mark as seen
+                
+                # Check embed thumbnail
+                elif "thumbnail" in embed and "url" in embed["thumbnail"]:
+                    thumb_url = embed["thumbnail"]["url"]
+                    normalized_thumb_url = thumb_url.split('?')[0]
+                    # Only add if not already in attachments
+                    if normalized_thumb_url not in attachment_urls_set:
+                        embed_images.append(thumb_url)
+                        attachment_urls_set.add(normalized_thumb_url)  # Mark as seen
+            
+            api_url = f"https://discord.com/api/v10/channels/{self.destination_channel_id}/messages"
+            headers = {"Authorization": self.token}
+            files = []  # Initialize files list
+            
+            # If there are attachments or embed images, use multipart/form-data
+            if has_attachments or embed_images:
+                form_data = {"content": forwarded_content}
+                
+                # Download and attach image files from attachments
+                for idx, (attachment_url, filename, content_type) in enumerate(attachment_info):
+                    try:
+                        if attachment_url:
+                            # Download the image
+                            img_response = requests.get(attachment_url, headers={"Authorization": self.token})
+                            if img_response.status_code == 200:
+                                files.append((
+                                    f"file{idx}",
+                                    (filename, img_response.content, content_type)
+                                ))
+                                print(f"{Colors.CYAN}Downloaded attachment: {filename}{Colors.RESET}")
+                    except Exception as e:
+                        print(f"{Colors.YELLOW}Warning: Could not download attachment {idx}: {str(e)}{Colors.RESET}")
+                
+                # Add embed images as attachments (only if not already in attachments)
+                for idx, img_url in enumerate(embed_images):
+                    try:
+                        img_response = requests.get(img_url, headers={"Authorization": self.token})
+                        if img_response.status_code == 200:
+                            filename = f"embed_image_{idx}.png"
+                            files.append((
+                                f"file{len(attachment_info) + idx}",
+                                (filename, img_response.content, "image/png")
+                            ))
+                            print(f"{Colors.CYAN}Downloaded embed image: {filename}{Colors.RESET}")
+                    except Exception as e:
+                        print(f"{Colors.YELLOW}Warning: Could not download embed image {idx}: {str(e)}{Colors.RESET}")
+                
+                # Send with multipart/form-data
+                if files:
+                    response = requests.post(api_url, headers=headers, data=form_data, files=files)
+                else:
+                    # Fallback to JSON if no files could be downloaded
+                    headers["Content-Type"] = "application/json"
+                    payload = {"content": forwarded_content}
+                    response = requests.post(api_url, headers=headers, json=payload)
+            else:
+                # No attachments, use simple JSON payload
+                headers["Content-Type"] = "application/json"
+                payload = {"content": forwarded_content}
+                response = requests.post(api_url, headers=headers, json=payload)
+            
+            if response.status_code == 200:
+                total_files = len(files) if files else 0
+                if total_files > 0:
+                    print(f"{Colors.GREEN}✓ Message forwarded with {total_files} unique image(s) to destination channel{Colors.RESET}")
+                else:
+                    print(f"{Colors.GREEN}✓ Message forwarded to destination channel{Colors.RESET}")
+            else:
+                print(f"{Colors.RED}✗ Failed to forward message: {response.status_code} - {response.text[:100]}{Colors.RESET}")
+                
+        except Exception as e:
+            print(f"{Colors.RED}Error forwarding message: {str(e)}{Colors.RESET}")
+            import traceback
+            traceback.print_exc()
 
 class DiscordGateway:
     """Discord Gateway client"""
@@ -857,7 +1079,10 @@ class DiscordListener:
     
     def __init__(self, token: str, channel_ids: List[str],
                  signal_keywords: List[str],
-                 notification_service: NotificationService):
+                 notification_service: NotificationService,
+                 destination_channel_id: Optional[str] = None,
+                 user_filters: Optional[Dict[str, List[str]]] = None,
+                 message_filters: Optional[Dict[str, List[str]]] = None):
         """
         Initialize Discord listener
         
@@ -866,11 +1091,17 @@ class DiscordListener:
             channel_ids: List of channel IDs to listen to
             signal_keywords: List of trading signal keywords
             notification_service: Notification service
+            destination_channel_id: Optional channel ID to forward messages to
+            user_filters: Optional dict mapping channel_id to list of usernames to filter
+            message_filters: Optional dict with regex patterns for message content filtering
         """
         self.token = token
         self.channel_ids = channel_ids
         self.signal_keywords = signal_keywords
         self.notification_service = notification_service
+        self.destination_channel_id = destination_channel_id
+        self.user_filters = user_filters or {}
+        self.message_filters = message_filters or {}
         
         # Message processor
         self.message_processor = MessageProcessor(
@@ -878,7 +1109,10 @@ class DiscordListener:
             signal_keywords=signal_keywords,
             signal_callback=self._handle_trading_signal,
             token=token,
-            use_rest_api=False  # Disable REST API calls
+            use_rest_api=False,  # Disable REST API calls
+            destination_channel_id=destination_channel_id,
+            user_filters=self.user_filters,
+            message_filters=self.message_filters
         )
         
         # Create Gateway client - 直接传入监控的频道ID
@@ -920,6 +1154,10 @@ class DiscordListener:
         print(f"{Colors.GREEN}Discord listening service started, monitoring channels:{Colors.RESET}")
         for info in channel_info:
             print(f"{Colors.CYAN}→ {info}{Colors.RESET}")
+        
+        if self.destination_channel_id:
+            dest_name = self.get_channel_name(self.destination_channel_id)
+            print(f"{Colors.GREEN}Messages will be forwarded to: {dest_name} ({self.destination_channel_id}){Colors.RESET}")
     
     def stop(self):
         if not self.running:
@@ -1071,11 +1309,47 @@ def main():
         notification_service.add_adapter(MacNotificationAdapter(sound_name="Submarine"))
     notification_service.add_adapter(ConsoleNotificationAdapter())
     
+    # Get destination channel ID if configured
+    destination_channel_id = config.get("discord.destination_channel_id")
+    
+    # Get user filters if configured
+    user_filters = config.get("discord.user_filters", {})
+    
+    # Get message filters if configured
+    message_filters = config.get("discord.message_filters", {})
+    
     # Create and start listening service
     try:
-        listener = DiscordListener(config.get("discord.token"), config.get("discord.channel_ids", []),
-                                  config.get("discord.signal_keywords", []), notification_service)
+        listener = DiscordListener(
+            config.get("discord.token"), 
+            config.get("discord.channel_ids", []),
+            config.get("discord.signal_keywords", []), 
+            notification_service,
+            destination_channel_id=destination_channel_id,
+            user_filters=user_filters,
+            message_filters=message_filters
+        )
         listener.start()
+        
+        # Display user filter info if configured
+        if user_filters:
+            print(f"\n{Colors.CYAN}User Filters Active:{Colors.RESET}")
+            for channel_id, users in user_filters.items():
+                channel_name = listener.get_channel_name(channel_id) if hasattr(listener, 'get_channel_name') else channel_id
+                print(f"{Colors.CYAN}  Channel {channel_name}: Only listening to {', '.join(users)}{Colors.RESET}")
+        
+        # Display message filter info if configured
+        if message_filters:
+            print(f"\n{Colors.CYAN}Message Filters Active:{Colors.RESET}")
+            for key, patterns in message_filters.items():
+                if key.isdigit():
+                    # Channel-level filter
+                    channel_name = listener.get_channel_name(key) if hasattr(listener, 'get_channel_name') else key
+                    print(f"{Colors.CYAN}  Channel {channel_name}: {len(patterns)} filter pattern(s){Colors.RESET}")
+                else:
+                    # User-level filter
+                    print(f"{Colors.CYAN}  User {key}: {len(patterns)} filter pattern(s){Colors.RESET}")
+            print(f"{Colors.CYAN}  Note: Messages with images/attachments are always included{Colors.RESET}")
         
         # Handle signals
         def signal_handler(sig, frame):
