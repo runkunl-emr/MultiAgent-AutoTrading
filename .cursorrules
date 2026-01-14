@@ -1,0 +1,27 @@
+# MultiAgent-AutoTrading Project Rules
+
+## Project Overview
+This project is a quantitative trading bot that monitors Discord alerts and executes trades.
+Key modules:
+- `adapters/`: External service adapters (Brokers, Notifications).
+- `core/`: Core logic (Executor, Listener, Orchestrator, Parser, RiskGuard).
+- `utils/`: Common utilities (Logging, Retry, CircuitBreaker).
+
+## Development Guidelines
+- **Python Version**: Ensure compatibility with Python 3.8+.
+- **Configuration**: Use `config/config.yaml` for settings. Do not hardcode sensitive info.
+- **Testing**: Use `test_bot.py` for testing various components.
+- **Adapters**: When adding new brokers, inherit from `BrokerAdapter` in `adapters/broker_adapter.py`.
+- **Parsers**: When adding new signal formats, inherit from `AlertParser` in `core/parser.py`.
+
+## Cursor Agent Skills (Specialized Tasks)
+- **Signal Analysis**: The agent can help analyze Discord message formats and suggest regex/parsing logic for `core/parser.py`.
+- **Risk Assessment**: The agent should prioritize safety and risk management as defined in `core/risk_guard.py`.
+- **Debugging**: When troubleshooting, check `logs/` directory (if present) and use the logging patterns in `utils/logging.py`.
+- **Summary Generation**: Understand the AI summary flow in `summarize_user_messages.py` and `daily_summary.py`.
+
+## Common Commands
+- **Monitor Discord**: `python run_discord_monitor.py`
+- **Run Tests**: `python -m test_bot --test all` or `python run_simple_test.py`
+- **Generate AI Summary**: `python daily_summary.py`
+- **Install Dependencies**: `pip install -r requirements.txt`
