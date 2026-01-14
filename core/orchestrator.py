@@ -11,6 +11,7 @@ from core.listener import DiscordListener
 from core.parser import ParserFactory
 from core.risk_guard import RiskGuardService
 from core.executor import ExecutionService
+from adapters.notification_adapter import NotificationService, create_platform_notification_adapter
 from utils.circuit_breaker import CircuitBreaker
 from utils.logging import log_with_context
 
@@ -48,6 +49,11 @@ class TradingOrchestrator:
         
         # Duplicate message prevention - configurable window (seconds)
         self.duplicate_window = config.get('duplicate_window', 60)
+        
+        # Initialize notification service
+        self.notification_service = NotificationService()
+        if self.config.get('notifications', {}).get('enabled', True):
+            self.notification_service.add_adapter(create_platform_notification_adapter())
         
         logger.info("Trading orchestrator initialized")
     
@@ -178,6 +184,12 @@ class TradingOrchestrator:
             data={"alert": parsed_alert.to_dict()}
         )
         
+        # Notify about new alert
+        self.notification_service.send_notification(
+            f"New Alert: {parsed_alert.symbol}",
+            f"Direction: {parsed_alert.bias}\nPrice: {parsed_alert.price}\nStrategy: {parsed_alert.strategy_id}"
+        )
+        
         # Call alert callbacks
         for callback in self.alert_callbacks:
             try:
@@ -196,6 +208,10 @@ class TradingOrchestrator:
                         f"Risk guard rejected alert: {risk_result.reason}",
                         correlation_id=correlation_id,
                         data={"risk_result": risk_result.to_dict()}
+                    )
+                    self.notification_service.send_notification(
+                        f"Risk Alert Rejected: {parsed_alert.symbol}",
+                        f"Reason: {risk_result.reason}"
                     )
                     self.stats['alerts_rejected'] += 1
                     return False
@@ -227,6 +243,10 @@ class TradingOrchestrator:
                         correlation_id=correlation_id,
                         data={"order_result": order_result.to_dict()}
                     )
+                    self.notification_service.send_notification(
+                        f"Order Executed: {parsed_alert.symbol}",
+                        f"Action: {parsed_alert.bias}\nQty: {quantity}\nPrice: {order_result.filled_price}"
+                    )
                     self.stats['orders_placed'] += 1
                     self.stats['orders_filled'] += 1
                 else:
@@ -235,6 +255,10 @@ class TradingOrchestrator:
                         f"Order execution failed: {order_result.error}",
                         correlation_id=correlation_id,
                         data={"order_result": order_result.to_dict()}
+                    )
+                    self.notification_service.send_notification(
+                        f"Order Failed: {parsed_alert.symbol}",
+                        f"Error: {order_result.error}"
                     )
                     self.stats['orders_failed'] += 1
                 
@@ -276,6 +300,10 @@ class TradingOrchestrator:
                     f"Risk guard rejected manual alert: {risk_result.reason}",
                     correlation_id=correlation_id
                 )
+                self.notification_service.send_notification(
+                    f"Manual Trade Rejected: {alert_info.symbol}",
+                    f"Reason: {risk_result.reason}"
+                )
                 return OrderResult(
                     success=False,
                     error=f"Risk guard rejected: {risk_result.reason}",
@@ -310,11 +338,19 @@ class TradingOrchestrator:
                     f"Manual order executed: {alert_info.symbol} {alert_info.bias} {quantity} shares",
                     correlation_id=correlation_id
                 )
+                self.notification_service.send_notification(
+                    f"Manual Order Executed: {alert_info.symbol}",
+                    f"Action: {alert_info.bias}\nQty: {quantity}\nPrice: {order_result.filled_price}"
+                )
             else:
                 log_with_context(
                     logger.error,
                     f"Manual order execution failed: {order_result.error}",
                     correlation_id=correlation_id
+                )
+                self.notification_service.send_notification(
+                    f"Manual Order Failed: {alert_info.symbol}",
+                    f"Error: {order_result.error}"
                 )
             
             return order_result

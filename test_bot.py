@@ -64,9 +64,9 @@ async def test_manual_trade(orchestrator):
     # Create a sample alert
     alert = AlertInfo(
         symbol="TSLA",
-        bias=TradeDirection.BULLISH,
+        direction="bull",
         price=900.0,
-        strategy="Manual Test",
+        strategy_id="Manual Test",
         correlation_id=str(uuid.uuid4()),
         timestamp=datetime.now()
     )
@@ -97,9 +97,9 @@ async def test_rejected_trade(orchestrator):
     # Create a risky alert (using a blacklisted symbol or excessive quantity)
     alert = AlertInfo(
         symbol="BLACKLISTED",  # This should be rejected if configured correctly
-        bias=TradeDirection.BULLISH,
+        direction="bull",
         price=1000.0,
-        strategy="Risky Test",
+        strategy_id="Risky Test",
         correlation_id=str(uuid.uuid4()),
         timestamp=datetime.now()
     )

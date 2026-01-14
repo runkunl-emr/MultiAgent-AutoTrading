@@ -83,7 +83,7 @@ class ExecutionService:
         start_time = time.time()
         
         # Determine order action based on bias
-        action = "BUY" if alert.bias == TradeDirection.BULLISH else "SELL"
+        action = "BUY" if alert.direction == "bull" else "SELL"
         
         # Apply slippage to the price based on direction
         adjusted_price = None

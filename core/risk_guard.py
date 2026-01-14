@@ -3,7 +3,7 @@ import time
 from typing import Dict, Optional, Any, List, Set
 from datetime import datetime, timedelta
 
-from core.models import AlertInfo, OrderInfo, AccountInfo
+from core.models import AlertInfo, OrderInfo, AccountInfo, RiskResult
 
 logger = logging.getLogger(__name__)
 
@@ -48,14 +48,14 @@ class RiskGuardService:
             blacklist = risk_config.get('blacklisted_symbols', [])
             self.blacklisted_symbols = set(blacklist)
     
-    def evaluate_alert(self, alert: AlertInfo) -> Optional[OrderInfo]:
+    def evaluate_alert(self, alert: AlertInfo) -> RiskResult:
         # Reset daily P&L if needed
         self._check_daily_reset()
         
         # Check if symbol is blacklisted
         if alert.symbol in self.blacklisted_symbols:
             logger.warning(f"Symbol {alert.symbol} is blacklisted, rejecting alert")
-            return None
+            return RiskResult(approved=False, reason=f"Symbol {alert.symbol} is blacklisted")
         
         # Check for duplicate signals (same symbol, same direction, within cooldown)
         trade_key = f"{alert.symbol}_{alert.direction}"
@@ -64,51 +64,36 @@ class RiskGuardService:
             if datetime.now() - last_time < self.cooldown_period:
                 logger.info(f"Ignoring duplicate signal for {alert.symbol} {alert.direction} "
                            f"(cooldown: {self.cooldown_period})")
-                return None
+                return RiskResult(approved=False, reason="Duplicate signal within cooldown period")
         
         # Get account info
         account_info = self._get_account_info()
         if not account_info:
             logger.error("Failed to get account info, rejecting alert")
-            return None
+            return RiskResult(approved=False, reason="Failed to get account info")
         
         # Check if we're over the daily loss limit
         if self.daily_pnl <= -1 * self.daily_loss_limit * account_info.balance:
             logger.warning(f"Daily loss limit reached ({self.daily_pnl:.2f}), rejecting all new trades")
-            return None
+            return RiskResult(approved=False, reason="Daily loss limit reached")
         
         # Check if we have too many open positions
         current_positions = len(account_info.positions)
         if current_positions >= self.max_open_positions:
             logger.warning(f"Maximum number of open positions reached ({current_positions}), rejecting alert")
-            return None
+            return RiskResult(approved=False, reason=f"Maximum open positions reached ({self.max_open_positions})")
         
         # Calculate position size
         position_size, quantity = self._calculate_position_size(alert, account_info)
         if quantity <= 0:
             logger.warning(f"Calculated quantity is zero or negative, rejecting alert")
-            return None
-        
-        # Determine action based on direction
-        action = "BUY" if alert.direction == "bull" else "SELL_SHORT"
-        
-        # Create order info
-        order_info = OrderInfo(
-            symbol=alert.symbol,
-            action=action,
-            quantity=quantity,
-            order_type="MKT",  # Default to market order for P0
-            price=alert.price,  # Reference price
-            correlation_id=alert.correlation_id,
-            strategy_id=alert.strategy_id,
-            # For P0, we're not setting stop_loss and take_profit yet
-        )
+            return RiskResult(approved=False, reason="Calculated position size is zero or negative")
         
         # Update recent trades
         self.recent_trades[trade_key] = datetime.now()
         
-        logger.info(f"Alert evaluation successful: {alert.symbol} {action} {quantity} shares")
-        return order_info
+        logger.info(f"Alert evaluation successful: {alert.symbol} {alert.direction} {quantity} shares")
+        return RiskResult(approved=True, position_size=quantity)
     
     def _get_account_info(self) -> Optional[AccountInfo]:
         if self.account_info_provider:

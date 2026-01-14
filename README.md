@@ -44,86 +44,60 @@ quant_trading_bot/
 └── requirements.txt     # Dependencies
 ```
 
+## Documentation
+
+Detailed documentation can be found in the `docs/` directory:
+- [Design Document](docs/DESIGN.md): System architecture and requirements.
+- [Discord Integration](docs/DISCORD_INTEGRATION.md): Various approaches to Discord connectivity.
+- [Summary Guide](docs/SUMMARY_GUIDE.md): Using the historical message analysis and AI summary features.
+- [PowerShell Reference](docs/POWERSHELL_COMMANDS.md): Guide for Windows users.
+
 ## Installation
 
 1. Clone the repository
-
 ```bash
 git clone https://github.com/yourusername/quant_trading_bot.git
 cd quant_trading_bot
 ```
 
-2. Create a virtual environment (recommended)
-
+2. Create and activate a virtual environment
 ```bash
 python -m venv venv
-source venv/bin/activate  # On Windows use: venv\Scripts\activate
+source venv/bin/activate  # Mac/Linux
+# .\venv\Scripts\activate # Windows
 ```
 
 3. Install dependencies
-
 ```bash
 pip install -r requirements.txt
 ```
 
 ## Configuration
 
-### Setting up Discord Token
-
-For security reasons, the Discord token should never be committed to the repository. Follow these steps to set up your token:
-
 1. Copy the template configuration file:
    ```bash
    cp config/discord_config_template.yaml config/discord_config.yaml
    ```
 
-2. Edit the configuration file and replace `${DISCORD_TOKEN}` with your actual Discord token:
-   ```bash
-   # Open the file in your preferred editor
-   nano config/discord_config.yaml
-   ```
-
-3. Alternatively, you can use environment variables:
-   ```bash
-   # Set environment variable
-   export DISCORD_TOKEN="your_discord_token"
-   
-   # Then in the config file, keep the placeholder:
-   # token: "${DISCORD_TOKEN}"
-   ```
-
-4. Make sure not to commit your real token to the repository.
-
-### Security Best Practices
-
-- Never commit sensitive tokens or credentials to Git repositories
-- Use environment variables for sensitive data in production
-- Keep the config file with real tokens in `.gitignore`
-- Consider using a secrets management solution for production deployments
+2. Edit the configuration file with your Discord token and monitored channel IDs. You can get your token from the browser's Developer Tools (Network tab -> Authorization header).
 
 ## Running
 
-### Basic Usage
-
+### Discord Monitor (Standalone)
+To just monitor Discord and log signals without execution:
 ```bash
-python -m quant_trading_bot.main --config quant_trading_bot/config/config.yaml
+python run_discord_monitor.py --config config/discord_config.yaml
 ```
 
-### Parameter Description
-
-- `--config`, `-c`: Configuration file path (default: config/config.yaml)
-- `--log-level`, `-l`: Logging level (default: INFO)
-- `--dry-run`, `-d`: Test mode, no actual trades executed
-
-### Examples
-
+### Full Trading Bot
+To run the full orchestrator (Parsing -> Risk -> Execution):
 ```bash
-# Run with DEBUG log level
-python -m quant_trading_bot.main --log-level DEBUG
-
-# Run in test mode (no actual trades)
-python -m quant_trading_bot.main --dry-run
+python main.py --config config/config.yaml
 ```
+
+Options:
+- `--dry-run`: Enable paper trading mode (no real trades).
+- `--log-level DEBUG`: Show detailed debug logs.
 
 ## Testing
 
@@ -178,34 +152,34 @@ This section tracks the development status of various components.
 | Feature | Status | Description |
 |------|------|------|
 | Basic Keyword Matching | ✅ Completed | Detects trading signal keywords |
-| Structured Signal Extraction | 🚧 Planned | Converts messages to standard trading instructions |
-| Multi-source Adaptation | 🚧 Planned | Support for different trading signal source formats |
+| Structured Signal Extraction | ✅ Completed | Support for English and Chinese alert formats |
+| Multi-source Adaptation | ✅ Completed | Parser factory for multiple signal formats |
 
 ### Trade Execution Module
 
 | Feature | Status | Description |
 |------|------|------|
-| Paper Trading Interface | 🚧 Planned | Simulated trading system for testing |
-| Broker API Integration | 🚧 Planned | Connection to actual broker APIs and trade execution |
-| Multi-broker Adapters | 🚧 Planned | Support for multiple trading platforms |
+| Paper Trading Interface | ✅ Completed | Simulated trading system with position tracking |
+| Broker API Integration | 🚧 Planned | Connection to actual broker APIs (IBKR, MooMoo in progress) |
+| Multi-broker Adapters | 🚧 In Progress | Broker adapter interface and factory implemented |
 
 ### Risk Management Module
 
 | Feature | Status | Description |
 |------|------|------|
-| Basic Capital Management | 🚧 Planned | Controls the proportion of capital per trade |
+| Basic Capital Management | ✅ Completed | Controls position sizing based on account balance |
 | Stop-Loss/Take-Profit Strategies | 🚧 Planned | Automatically sets stop-loss and take-profit levels |
-| Trading Restriction Rules | 🚧 Planned | Prevents excessive trading and risk accumulation |
+| Trading Restriction Rules | ✅ Completed | Daily loss limits, max positions, and blacklists |
 
 ### System and Infrastructure
 
 | Feature | Status | Description |
 |------|------|------|
 | Configuration Management | ✅ Completed | YAML configuration system, supports command-line parameters |
-| Logging System | ✅ Completed | Basic logging functionality |
-| Notification System | ✅ Completed | Support for desktop and console notifications |
-| Unit Tests | 🚧 Planned | Test cases for various modules |
-| Complete Documentation | 🚧 In Progress | Code comments and usage instructions |
+| Logging System | ✅ Completed | Context-aware logging with correlation IDs |
+| Notification System | ✅ Completed | Support for Mac system and Console notifications |
+| Unit Tests | ✅ Completed | Functional test suite for parsing and execution |
+| Complete Documentation | 🚧 In Progress | Ongoing documentation of modules and API |
 
 ### Recent Updates (2025-04-06)
 
